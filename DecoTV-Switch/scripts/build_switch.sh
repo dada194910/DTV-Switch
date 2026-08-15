@@ -33,7 +33,8 @@ if [ ! -d library/borealis/library ]; then
     curl -sL -H "User-Agent: DecoTV-CI" -m 120 -o /tmp/xb.tar.gz \
         "https://api.github.com/repos/xfangfang/borealis/tarball/5f08b286f3df737f3321d2247a6fe633fcead03c"
     tar -xzf /tmp/xb.tar.gz -C /tmp/xb
-    mv /tmp/xb/borealis-* library/borealis
+    # GitHub tarball 根目录名格式：<owner>-<repo>-<sha前10>（如 xfangfang-borealis-5f08b28）
+    mv /tmp/xb/xfangfang-borealis-* library/borealis
 fi
 echo "==> borealis 就绪检查:"
 ls library/borealis/library/lib/extern/switch-libpulsar/deps.mk && echo "  deps.mk OK"
