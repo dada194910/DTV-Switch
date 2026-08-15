@@ -1,41 +1,35 @@
-// DecoTV Switch 客户端 —— 最小可运行版（libnx-only）
-// 目标：验证整条链路（交叉编译 -> .nro -> 真机显示 -> 按键 -> 退出）
-// 屏幕打印服务器地址横幅；按 [+] 键退出
-//
-// 输入采用 libnx 官方推荐方式：pad.h 抽象层
-// （参照 switch-examples/hid/read-controls 官方示例）
-// - padInitialize 内部会自动激活 Npad 子系统（hidInitializeNpad）
-// - padUpdate 内部自动处理掌机(Handheld)/Pro(FullKey)/分离双 Joy-Con(JoyDual/Left/Right) 全部形态
-// - 直接戳 hidGetNpadStates* 底层 API 容易踩连接检查/激活时序的坑，官方 pad 层已封装
-#include <switch.h>
-#include <cstdio>
+// DecoTV Switch 客户端 —— P1：borealis UI 框架启动页
+// 暗色主题（borealis 默认），标题栏 + 居中服务器地址
+// [+] 键退出由 borealis 内置处理（application.cpp 默认注册 PLUS -> quit）
+#include <borealis.hpp>
 
 int main(int argc, char* argv[]) {
-    // 初始化控制台输出（无需 framebuffer 初始化）
-    consoleInit(nullptr);
+    brls::Logger::setLogLevel(brls::LogLevel::LOG_INFO);
 
-    printf("\x1b[2J");  // 清屏
-    printf("\x1b[16;12H");  // 光标移到中间
-    printf("DecoTV Switch Client\n");
-    printf("\x1b[17;8H");
-    printf("Server: http://tv.2001002.xyz:11113\n");
-    printf("\x1b[20;6H");
-    printf("Press [+] to exit\n");
-
-    // 配置输入：单玩家 + 标准手柄样式（FullKey/Handheld/JoyDual/JoyLeft/JoyRight）
-    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-    // 默认手柄：自动涵盖掌机模式输入 + 第一台已连接手柄
-    PadState pad;
-    padInitializeDefault(&pad);
-
-    // 主循环：[+] 退出
-    while (appletMainLoop()) {
-        padUpdate(&pad);
-        u64 kDown = padGetButtonsDown(&pad);
-        if (kDown & HidNpadButton_Plus) break;
-        consoleUpdate(nullptr);
+    // 初始化 borealis（默认暗色主题）
+    if (!brls::Application::init("DecoTV")) {
+        brls::Logger::error("Unable to init Borealis application");
+        return EXIT_FAILURE;
     }
 
-    consoleExit(nullptr);
-    return 0;
+    // 启动页：顶部标题栏 + 居中显示服务器地址
+    // 用纯 ASCII 文本，规避中文字体依赖（中文 UI + 字体留到后续阶段）
+    brls::AppletFrame* root = new brls::AppletFrame(true, true);
+    root->setTitle("DecoTV");
+
+    brls::Label* label = new brls::Label(brls::LabelStyle::REGULAR,
+        "DecoTV client  http://tv.2001002.xyz:11113");
+    label->setHorizontalAlign(NVG_ALIGN_CENTER);
+    label->setVerticalAlign(NVG_ALIGN_MIDDLE);
+    label->setFontSize(24);
+
+    root->setContentView(label);
+
+    // 压入根视图并进入主循环（[+] 退出）
+    brls::Application::pushView(root);
+
+    while (brls::Application::mainLoop())
+        ;
+
+    return EXIT_SUCCESS;
 }
