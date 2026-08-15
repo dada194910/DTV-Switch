@@ -103,23 +103,22 @@ class VideoListActivity : public brls::Activity {
             brls::Application::popActivity();
             return true;
         });
+        // 翻页注册在 frame 上（v1.12：不再用 ScrollingFrame——它是 v1.09 启动崩溃元凶，
+        // 列表改为小分页 Box，每页 8 条一屏显示完，左右键翻页）
+        frame->registerAction("上一页", brls::ControllerButton::BUTTON_LEFT, [this](brls::View*) {
+            if (m_page > 0) { m_page--; loadPage(); }
+            return true;
+        });
+        frame->registerAction("下一页", brls::ControllerButton::BUTTON_RIGHT, [this](brls::View*) {
+            m_page++;
+            loadPage();
+            return true;
+        });
 
         m_info = new brls::Label();
         m_info->setFontSize(20);
 
         m_primaryBar = new brls::Box(brls::Axis::ROW);
-
-        m_scroll = new brls::ScrollingFrame();
-        m_scroll->setPadding(20, 20, 20, 20);
-        m_scroll->registerAction("上一页", brls::ControllerButton::BUTTON_LEFT, [this](brls::View*) {
-            if (m_page > 0) { m_page--; loadPage(); }
-            return true;
-        });
-        m_scroll->registerAction("下一页", brls::ControllerButton::BUTTON_RIGHT, [this](brls::View*) {
-            m_page++;
-            loadPage();
-            return true;
-        });
 
         // 主筛选标签：一次性创建，之后只更新选中态（绝不删除重建，防 use-after-free）
         for (size_t i = 0; i < m_cat.primary.size(); ++i) {
@@ -135,10 +134,12 @@ class VideoListActivity : public brls::Activity {
         }
         updatePrimarySelected();
 
+        m_listBox = new brls::Box(brls::Axis::COLUMN);  // 列表容器：Box 分页（无滚动）
+
         auto* layout = new brls::Box(brls::Axis::COLUMN);
         layout->addView(m_info);
         layout->addView(m_primaryBar);
-        layout->addView(m_scroll);
+        layout->addView(m_listBox);
         frame->setContentView(layout);
 
         loadPage();
@@ -159,42 +160,48 @@ class VideoListActivity : public brls::Activity {
 
         m_info->setText("第 " + std::to_string(m_page + 1) + " 页   ◀▶翻页  A选中  B返回");
 
+        // 清掉旧行：Box::removeView 会 delete 子视图（发生在翻页/筛选回调里，
+        // 删除的不是正在执行回调的视图本身，安全）
+        for (auto* r : m_rows) m_listBox->removeView(r);
+        m_rows.clear();
+
         auto items = decotv::fetchDoubanList(kind, category, type, PAGE_SIZE, m_page * PAGE_SIZE);
 
-        auto* box = new brls::Box(brls::Axis::COLUMN);
         if (items.empty()) {
             auto* lbl = new brls::Label();
             lbl->setText("暂无内容或加载失败");
             lbl->setFontSize(22);
-            box->addView(lbl);
+            m_listBox->addView(lbl);
+            m_rows.push_back(lbl);
         } else {
             for (auto& v : items) {
                 std::string sub = v.year;
                 if (!sub.empty() && !v.rate.empty()) sub += "  ⭐" + v.rate;
                 else if (!v.rate.empty()) sub = "⭐" + v.rate;
-                box->addView(makeRow(v.title, sub, [v](brls::View*) {
+                auto* row = makeRow(v.title, sub, [v](brls::View*) {
                     brls::Application::notify("详情/选源/播放 将在 P4 实现");
                     return true;
-                }));
+                });
+                m_listBox->addView(row);
+                m_rows.push_back(row);
             }
         }
-        m_scroll->setContentView(box);
     }
 
-    static constexpr int PAGE_SIZE = 20;
+    static constexpr int PAGE_SIZE = 8;  // 小分页：一屏显示完，无需滚动
     decotv::Category m_cat;
     int m_primaryIndex = 0;
     int m_page = 0;
     brls::Label* m_info = nullptr;
     brls::Box* m_primaryBar = nullptr;
-    brls::ScrollingFrame* m_scroll = nullptr;
+    brls::Box* m_listBox = nullptr;
     std::vector<FilterTab> m_barTabs;
+    std::vector<brls::View*> m_rows;
 };
 
 // ---- 首页 ----
-// v1.11：启动路径完全复刻 v1.08 已验证结构（AppletFrame + Box + Label 纯显示，
-// 无 ScrollingFrame / 无 setFocusable / 无 registerClickAction），先恢复"能启动"。
-// 元凶定位：若本版能启动 → 崩在 v1.09 新引入的上述 API；若仍崩 → 内存/环境问题（高内存模式 + crash report）
+// v1.12：恢复分类点击进列表（makeRow: focusable + click），但不使用 ScrollingFrame
+// （v1.09 启动崩溃元凶已确认），4 个分类用 Box 直接排布，无需滚动。
 class HomeActivity : public brls::Activity {
   public:
     brls::View* createContentView() override {
@@ -215,10 +222,10 @@ class HomeActivity : public brls::Activity {
             box->addView(lbl);
         } else {
             for (auto& c : g_categories) {
-                auto* lbl = new brls::Label();
-                lbl->setText("▶ " + c.label);
-                lbl->setFontSize(28);  // 分类名大字号，保证可读
-                box->addView(lbl);
+                box->addView(makeRow(c.label, "A 进入浏览", [c](brls::View*) {
+                    brls::Application::pushActivity(new VideoListActivity(c));
+                    return true;
+                }));
             }
         }
 
