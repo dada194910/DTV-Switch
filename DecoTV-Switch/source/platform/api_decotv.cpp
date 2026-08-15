@@ -61,6 +61,12 @@ static CURL* makeHandle(std::string* outBody) {
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DecoTV-Switch/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
+    // P4a：HTTPS 支持。switch-curl 的默认 SSL 后端是 libnx（系统 ssl 服务，
+    // initNetwork 里已 sslInitialize）。跳过证书校验：很多 TVBox 源站的证书
+    // 不在 Switch 系统 CA 里，且 homebrew 场景可接受（wiliwili 同款做法）
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
     // 读 + 写同一个 cookie jar（关键：登录后的 auth cookie 靠它在后续请求带上）
     curl_easy_setopt(curl, CURLOPT_COOKIEFILE, COOKIE_PATH);
     curl_easy_setopt(curl, CURLOPT_COOKIEJAR, COOKIE_PATH);
@@ -79,6 +85,9 @@ bool initNetwork() {
     g_netInitResult = rc;
     if (R_FAILED(rc) && rc != MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized))
         return false;
+
+    // P4a：初始化 libnx SSL 服务（curl 的 libnx TLS 后端需要；init.c 不自动初始化）
+    sslInitialize(8);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     return true;
@@ -237,6 +246,68 @@ std::vector<VideoItem> fetchDoubanList(const std::string& kind, const std::strin
             v.rate  = item.value("rate", "");
             v.year  = item.value("year", "");
             if (!v.title.empty()) result.push_back(std::move(v));
+        }
+    } catch (...) {
+        return result;
+    }
+    return result;
+}
+
+std::vector<TvboxSource> fetchTvboxSources(HttpResponse* out) {
+    std::vector<TvboxSource> result;
+    HttpResponse resp;
+    httpGet(std::string(BASE_URL) + "/api/search/resources", true, &resp);
+    if (out) *out = resp;
+    if (resp.body.empty()) return result;
+    try {
+        json j = json::parse(resp.body);
+        if (!j.is_array()) return result;
+        for (auto& s : j) {
+            TvboxSource src;
+            src.key  = s.value("key", "");
+            src.name = s.value("name", "");
+            src.api  = s.value("api", "");
+            if (!src.key.empty() && !src.api.empty()) result.push_back(std::move(src));
+        }
+    } catch (...) {
+        return result;
+    }
+    return result;
+}
+
+std::vector<TvboxHit> searchTvboxSource(const TvboxSource& src, const std::string& keyword,
+                                        HttpResponse* out) {
+    std::vector<TvboxHit> result;
+    // TVBox 协议：GET {api}?wd=关键词&ac=detail（ac=detail 才返回 vod_play_url）
+    std::string url = src.api;
+    url += (url.find('?') == std::string::npos ? "?" : "&");
+    url += "wd=" + urlEncode(keyword) + "&ac=detail";
+
+    HttpResponse resp;
+    httpGet(url, false, &resp);  // 源 API 直连，无需 DecoTV cookie
+    if (out) *out = resp;
+    if (resp.body.empty()) return result;
+
+    try {
+        json j = json::parse(resp.body);
+        if (!j.contains("list") || !j["list"].is_array()) return result;
+        for (auto& it : j["list"]) {
+            TvboxHit hit;
+            hit.sourceKey  = src.key;
+            hit.sourceName = src.name;
+            hit.vodId      = std::to_string(it.value("vod_id", 0));
+            hit.vodName    = it.value("vod_name", "");
+            // vod_play_url 形如 "正片$https://...m3u8#第2集$https://..."，取第一个地址
+            std::string pu = it.value("vod_play_url", "");
+            size_t first = pu.find('$');
+            if (first != std::string::npos) {
+                size_t end = pu.find('#', first);
+                hit.playUrl = pu.substr(first + 1,
+                                        end == std::string::npos ? std::string::npos
+                                                                 : end - first - 1);
+            }
+            if (!hit.vodName.empty() && !hit.playUrl.empty())
+                result.push_back(std::move(hit));
         }
     } catch (...) {
         return result;
