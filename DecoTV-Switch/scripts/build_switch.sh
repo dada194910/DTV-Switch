@@ -22,6 +22,10 @@ if [ ! -d library/borealis/.git ]; then
     git checkout 20e2d33b6c4ffce139ce304c503c04f5b94da920
     git submodule update --init --recursive
     cd /data/DecoTV-Switch
+
+    # 补丁：borealis 调用了 libnx 不存在的 swkbdConfigSetStringLenMaxExt
+    # （我们暂不用软件键盘，直接剔除该调用，避免编译失败）
+    sed -i '/swkbdConfigSetStringLenMaxExt/d' library/borealis/library/lib/platforms/switch/swkbd.cpp
 fi
 
 echo "==> Building (classic devkitPro Makefile + borealis) ..."
