@@ -47,7 +47,7 @@ bool login(const std::string& username, const std::string& password, HttpRespons
 // GET /api/categories（带 cookie）→ 分类列表；*out 可空：传出请求结果（排错用）
 std::vector<Category> fetchCategories(HttpResponse* out = nullptr);
 
-// 内部 GET helper：返回响应 body（空串表示失败）；*outStatus 传出 HTTP 状态码（可为 nullptr）
-std::string httpGet(const std::string& url, bool withCookies, long* outStatus = nullptr);
+// 内部 GET helper：结果写入 out（body/status/curlError）；传输失败自动重试 3 次
+void httpGet(const std::string& url, bool withCookies, HttpResponse* out);
 
 }  // namespace decotv
