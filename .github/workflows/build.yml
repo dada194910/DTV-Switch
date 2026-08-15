@@ -1,0 +1,25 @@
+name: Build DecoTV .nro
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Nro
+        # devkitpro/devkita64 is the devkitA64-only image (much smaller than the
+        # full devkitpro/devkitpro). Mount workspace to /data and run our script.
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/data devkitpro/devkita64:20251117 bash /data/DecoTV-Switch/scripts/build_switch.sh
+
+      - name: Upload .nro
+        uses: actions/upload-artifact@v4
+        with:
+          name: DecoTV-nro
+          path: DecoTV-Switch/build/DecoTV.nro
