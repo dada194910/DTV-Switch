@@ -17,6 +17,8 @@ namespace decotv {
 
 using json = nlohmann::json;
 
+unsigned int g_netInitResult = 0;
+
 // ---- curl 写回调：把响应体追加进 std::string ----
 static size_t writeToString(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t total = size * nmemb;
@@ -46,15 +48,21 @@ static CURL* makeHandle(std::string* outBody, bool withCookies) {
 bool initNetwork() {
     // sdmc 挂载（cookie 持久化需要；libnx 4.x 用 fsdevMountSdmc，无对应 exit，进程结束自动清理）
     fsdevMountSdmc();
-    // 网络套接字（curl 需要）
-    if (R_FAILED(socketInitializeDefault())) return false;
+
+    // socket：borealis 的 userAppInit 已初始化（switch_wrapper.c），二次调用会返回
+    // AlreadyInitialized，此时 socket 已就绪，视为成功
+    Result rc = socketInitializeDefault();
+    g_netInitResult = rc;
+    if (R_FAILED(rc) && rc != MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized))
+        return false;
+
     curl_global_init(CURL_GLOBAL_DEFAULT);
     return true;
 }
 
 void exitNetwork() {
     curl_global_cleanup();
-    socketExit();
+    // socketExit 由 borealis 的 userAppExit 负责，这里不重复调用
 }
 
 bool hasSavedLogin() {
