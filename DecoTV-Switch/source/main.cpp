@@ -49,19 +49,30 @@ static brls::Box* makeRow(const std::string& mainText, const std::string& subTex
     return row;
 }
 
-// ---- 主筛选标签按钮（横排）----
-static brls::Box* makeFilter(const std::string& text, bool selected,
-                             std::function<bool(brls::View*)> onClick) {
-    auto* b = new brls::Box(brls::Axis::COLUMN);
-    b->setFocusable(true);
-    b->setHeight(46);
-    b->setWidth(170);
-    auto* lbl = new brls::Label();
-    lbl->setText((selected ? "▶ " : "   ") + text);
-    lbl->setFontSize(20);
-    b->addView(lbl);
-    b->registerClickAction(onClick);
-    return b;
+// ---- 主筛选标签（横排）----
+// 安全设计：标签创建一次后只更新选中文本，绝不删除重建。
+// 原因：若在点击回调里 removeView/delete 正在执行回调的按钮自身，
+// 回调返回后框架再访问该 View 即为 use-after-free → data abort → 2168-0002 死机。
+struct FilterTab {
+    brls::Box* box     = nullptr;
+    brls::Label* label = nullptr;
+    std::string text;
+};
+
+static FilterTab makeFilterTab(const std::string& text,
+                               std::function<bool(brls::View*)> onClick) {
+    FilterTab ft;
+    ft.text = text;
+    ft.box = new brls::Box(brls::Axis::COLUMN);
+    ft.box->setFocusable(true);
+    ft.box->setHeight(46);
+    ft.box->setWidth(170);
+    ft.label = new brls::Label();
+    ft.label->setFontSize(20);
+    ft.label->setText("   " + text);
+    ft.box->addView(ft.label);
+    ft.box->registerClickAction(std::move(onClick));
+    return ft;
 }
 
 // ---- 分类 → 豆瓣参数映射 ----
@@ -110,38 +121,35 @@ class VideoListActivity : public brls::Activity {
             return true;
         });
 
+        // 主筛选标签：一次性创建，之后只更新选中态（绝不删除重建，防 use-after-free）
+        for (size_t i = 0; i < m_cat.primary.size(); ++i) {
+            FilterTab ft = makeFilterTab(m_cat.primary[i].label, [this, i](brls::View*) {
+                m_primaryIndex = (int)i;
+                m_page = 0;
+                updatePrimarySelected();
+                loadPage();
+                return true;
+            });
+            m_primaryBar->addView(ft.box);
+            m_barTabs.push_back(std::move(ft));
+        }
+        updatePrimarySelected();
+
         auto* layout = new brls::Box(brls::Axis::COLUMN);
         layout->addView(m_info);
         layout->addView(m_primaryBar);
         layout->addView(m_scroll);
         frame->setContentView(layout);
 
-        refresh();
+        loadPage();
         return frame;
     }
 
   private:
-    void refresh() {
-        rebuildPrimaryBar();
-        loadPage();
-    }
-
-    void rebuildPrimaryBar() {
-        // 移除旧筛选按钮（removeView 后不 delete，避免 double-free，少量泄漏可接受）
-        for (auto* b : m_barButtons) m_primaryBar->removeView(b);
-        m_barButtons.clear();
-
-        if (m_cat.primary.empty()) return;
-        for (size_t i = 0; i < m_cat.primary.size(); ++i) {
-            auto* b = makeFilter(m_cat.primary[i].label, (int)i == m_primaryIndex,
-                                 [this, i](brls::View*) {
-                m_primaryIndex = (int)i;
-                m_page = 0;
-                refresh();
-                return true;
-            });
-            m_barButtons.push_back(b);
-            m_primaryBar->addView(b);
+    void updatePrimarySelected() {
+        for (size_t i = 0; i < m_barTabs.size(); ++i) {
+            bool sel = ((int)i == m_primaryIndex);
+            m_barTabs[i].label->setText((sel ? "▶ " : "   ") + m_barTabs[i].text);
         }
     }
 
@@ -180,7 +188,7 @@ class VideoListActivity : public brls::Activity {
     brls::Label* m_info = nullptr;
     brls::Box* m_primaryBar = nullptr;
     brls::ScrollingFrame* m_scroll = nullptr;
-    std::vector<brls::View*> m_barButtons;
+    std::vector<FilterTab> m_barTabs;
 };
 
 // ---- 首页 ----
