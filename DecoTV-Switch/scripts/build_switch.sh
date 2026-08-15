@@ -5,13 +5,22 @@ set -e
 
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 
-echo "==> Ensuring devkitA64 toolchain + deko3d ..."
+echo "==> Ensuring devkitA64 toolchain + deko3d + curl ..."
 # switch-dev 是包组（libnx / devkitA64 / switch-tools / uam 等）；borealis(deko3d) 需要 deko3d 库
 # 注意包名是 deko3d 而非 switch-deko3d（且 switch-dev 组已含 deko3d，此处幂等补装）
-dkp-pacman -S --noconfirm switch-dev deko3d
+# switch-curl 提供 libcurl（无外部 SSL，HTTP 直连足够）
+dkp-pacman -S --noconfirm switch-dev deko3d switch-curl
 
-echo "==> Ensuring git (for borealis clone) ..."
-command -v git >/dev/null 2>&1 || pacman -S --noconfirm git
+echo "==> Ensuring git + curl (for borealis clone / json fetch) ..."
+command -v git  >/dev/null 2>&1 || pacman -S --noconfirm git
+command -v curl >/dev/null 2>&1 || pacman -S --noconfirm curl
+
+echo "==> Vendoring nlohmann/json.hpp (single header) ..."
+mkdir -p /data/DecoTV-Switch/include/nlohmann
+if [ ! -s /data/DecoTV-Switch/include/nlohmann/json.hpp ]; then
+    curl -sL "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp" \
+        -o /data/DecoTV-Switch/include/nlohmann/json.hpp
+fi
 
 echo "==> Fetching borealis (pinned to 20e2d33, deko3d backend, incl. switch-libpulsar submodule) ..."
 cd /data/DecoTV-Switch
