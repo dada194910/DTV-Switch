@@ -99,6 +99,9 @@ class VideoListActivity : public brls::Activity {
     brls::View* createContentView() override {
         m_info = new brls::Label();
         m_info->setFontSize(20);
+        // v1.14 修复：m_info 作为"永存活焦点锚点"（翻页/切筛选删行前先给它焦点，
+        // 否则被删除行持有 currentFocus → 下一帧访问已删除 View → use-after-free → 2168-0001）
+        m_info->setFocusable(true);
 
         m_primaryBar = new brls::Box(brls::Axis::ROW);
 
@@ -160,8 +163,15 @@ class VideoListActivity : public brls::Activity {
 
         m_info->setText("第 " + std::to_string(m_page + 1) + " 页   ◀▶翻页  A选中  B返回");
 
-        // 清掉旧行：Box::removeView 会 delete 子视图（发生在翻页/筛选回调里，
-        // 删除的不是正在执行回调的视图本身，安全）
+        // v1.14 关键修复：删除旧行前先把焦点转移到保活锚点（m_info）。
+        // 原因：若当前焦点在某个将被删除的列表行上，removeView delete 该行后
+        // currentFocus 成为悬垂指针，下一帧输入/渲染访问它 → 调用已释放对象的
+        // 虚函数 → vtable 跳转无效地址 → Instruction Abort (2168-0001)。
+        // 必须先转移焦点（giveFocus 会对旧焦点调 onFocusLost，此时旧焦点必须还活着），
+        // 再删除旧行。
+        brls::Application::giveFocus(m_info);
+
+        // 清掉旧行：Box::removeView 会 delete 子视图（删除的不是正在执行回调的视图本身，安全）
         for (auto* r : m_rows) m_listBox->removeView(r);
         m_rows.clear();
 
@@ -185,6 +195,8 @@ class VideoListActivity : public brls::Activity {
                 m_listBox->addView(row);
                 m_rows.push_back(row);
             }
+            // 重建后聚焦第一行（焦点安全 + 翻页体验：焦点直接在新列表上）
+            brls::Application::giveFocus(m_rows[0]);
         }
     }
 
