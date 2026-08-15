@@ -1,59 +1,219 @@
-// DecoTV Switch 客户端 —— P2：borealis UI + 网络层自检
-// 启动时：初始化网络 → 登录（或复用已有 cookie）→ 拉分类 → 界面显示结果
-// [+] 退出：setGlobalQuit(true)
+// DecoTV Switch 客户端 —— P3：首页分类浏览 + 影片列表（豆瓣驱动）
+// 首页：4 分类（电影/电视剧/综艺/动漫）
+// 列表页：主筛选标签 + 影片列表（标题/年份/评分），◀▶ 翻页，A 选中（详情 P4）
+// [+] 退出：setGlobalQuit(true)；B 返回上一页
 #include <borealis.hpp>
 #include <switch.h>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "platform/api_decotv.h"
 
-// 加载系统简体中文字体并挂到 regular 的 fallback 链（否则中文渲染为乱码/方框）
-// 用 Switch 固件自带的 PlSharedFontType_ChineseSimplified，无需往 romfs 塞字体文件
+static std::vector<decotv::Category> g_categories;
+static std::string g_startupError;
+
+// ---- 中文字体 fallback（系统简体中文字体）----
 static void setupChineseFont() {
     PlFontData font;
     if (R_FAILED(plGetSharedFontByType(&font, PlSharedFontType_ChineseSimplified)))
         return;
-
     if (!brls::Application::loadFontFromMemory("chinese_simplified", font.address, font.size, false))
         return;
-
     int regular = brls::Application::getFont(brls::FONT_REGULAR);
     int cjk     = brls::Application::getFont("chinese_simplified");
     if (regular == brls::FONT_INVALID || cjk == brls::FONT_INVALID)
         return;
-
     nvgAddFallbackFontId(brls::Application::getNVGContext(), regular, cjk);
 }
 
-// 启动前网络自检结果（main 里填充，Activity 显示）
-static std::string g_statusTitle;   // 主状态（大字号）
-static std::string g_statusDetail;  // 详情（可读字号）
+// ---- 自定义可聚焦行（主文本 + 副文本，A 键触发）----
+static brls::Box* makeRow(const std::string& mainText, const std::string& subText,
+                          std::function<bool(brls::View*)> onClick) {
+    auto* row = new brls::Box(brls::Axis::COLUMN);
+    row->setFocusable(true);
+    row->setHeight(64);
 
-class StartupActivity : public brls::Activity {
+    auto* t = new brls::Label();
+    t->setText(mainText);
+    t->setFontSize(24);  // 主文本：保证可读
+    row->addView(t);
+
+    if (!subText.empty()) {
+        auto* s = new brls::Label();
+        s->setText(subText);
+        s->setFontSize(20);
+        row->addView(s);
+    }
+    row->registerClickAction(onClick);
+    return row;
+}
+
+// ---- 主筛选标签按钮（横排）----
+static brls::Box* makeFilter(const std::string& text, bool selected,
+                             std::function<bool(brls::View*)> onClick) {
+    auto* b = new brls::Box(brls::Axis::COLUMN);
+    b->setFocusable(true);
+    b->setHeight(46);
+    b->setWidth(170);
+    auto* lbl = new brls::Label();
+    lbl->setText((selected ? "▶ " : "   ") + text);
+    lbl->setFontSize(20);
+    b->addView(lbl);
+    b->registerClickAction(onClick);
+    return b;
+}
+
+// ---- 分类 → 豆瓣参数映射 ----
+static void categoryToDouban(const decotv::Category& cat, int primaryIndex,
+                             std::string& kind, std::string& category, std::string& type) {
+    kind = "movie"; category = "全部"; type = "全部";
+    if (cat.key == "movie") {
+        kind = "movie";
+        if (primaryIndex >= 0 && primaryIndex < (int)cat.primary.size())
+            category = cat.primary[primaryIndex].value;
+        type = "全部";
+    } else if (cat.key == "show") {
+        kind = "tv"; category = "show"; type = "show";
+    } else {  // tv / anime
+        kind = "tv"; category = "tv"; type = "tv";
+    }
+}
+
+// ---- 影片列表页 ----
+class VideoListActivity : public brls::Activity {
+  public:
+    explicit VideoListActivity(decotv::Category c) : m_cat(std::move(c)) {}
+
+    brls::View* createContentView() override {
+        auto* frame = new brls::AppletFrame();
+        frame->setTitle("DecoTV - " + m_cat.label);
+        frame->registerAction("返回", brls::ControllerButton::BUTTON_B, [](brls::View*) {
+            brls::Application::popActivity();
+            return true;
+        });
+
+        m_info = new brls::Label();
+        m_info->setFontSize(20);
+
+        m_primaryBar = new brls::Box(brls::Axis::ROW);
+
+        m_scroll = new brls::ScrollingFrame();
+        m_scroll->setPadding(20, 20, 20, 20);
+        m_scroll->registerAction("上一页", brls::ControllerButton::BUTTON_LEFT, [this](brls::View*) {
+            if (m_page > 0) { m_page--; loadPage(); }
+            return true;
+        });
+        m_scroll->registerAction("下一页", brls::ControllerButton::BUTTON_RIGHT, [this](brls::View*) {
+            m_page++;
+            loadPage();
+            return true;
+        });
+
+        auto* layout = new brls::Box(brls::Axis::COLUMN);
+        layout->addView(m_info);
+        layout->addView(m_primaryBar);
+        layout->addView(m_scroll);
+        frame->setContentView(layout);
+
+        refresh();
+        return frame;
+    }
+
+  private:
+    void refresh() {
+        rebuildPrimaryBar();
+        loadPage();
+    }
+
+    void rebuildPrimaryBar() {
+        // 移除旧筛选按钮（removeView 后不 delete，避免 double-free，少量泄漏可接受）
+        for (auto* b : m_barButtons) m_primaryBar->removeView(b);
+        m_barButtons.clear();
+
+        if (m_cat.primary.empty()) return;
+        for (size_t i = 0; i < m_cat.primary.size(); ++i) {
+            auto* b = makeFilter(m_cat.primary[i].label, (int)i == m_primaryIndex,
+                                 [this, i](brls::View*) {
+                m_primaryIndex = (int)i;
+                m_page = 0;
+                refresh();
+                return true;
+            });
+            m_barButtons.push_back(b);
+            m_primaryBar->addView(b);
+        }
+    }
+
+    void loadPage() {
+        std::string kind, category, type;
+        categoryToDouban(m_cat, m_primaryIndex, kind, category, type);
+
+        m_info->setText("第 " + std::to_string(m_page + 1) + " 页   ◀▶翻页  A选中  B返回");
+
+        auto items = decotv::fetchDoubanList(kind, category, type, PAGE_SIZE, m_page * PAGE_SIZE);
+
+        auto* box = new brls::Box(brls::Axis::COLUMN);
+        if (items.empty()) {
+            auto* lbl = new brls::Label();
+            lbl->setText("暂无内容或加载失败");
+            lbl->setFontSize(22);
+            box->addView(lbl);
+        } else {
+            for (auto& v : items) {
+                std::string sub = v.year;
+                if (!sub.empty() && !v.rate.empty()) sub += "  ⭐" + v.rate;
+                else if (!v.rate.empty()) sub = "⭐" + v.rate;
+                box->addView(makeRow(v.title, sub, [v](brls::View*) {
+                    brls::Application::notify("详情/选源/播放 将在 P4 实现");
+                    return true;
+                }));
+            }
+        }
+        m_scroll->setContentView(box);
+    }
+
+    static constexpr int PAGE_SIZE = 20;
+    decotv::Category m_cat;
+    int m_primaryIndex = 0;
+    int m_page = 0;
+    brls::Label* m_info = nullptr;
+    brls::Box* m_primaryBar = nullptr;
+    brls::ScrollingFrame* m_scroll = nullptr;
+    std::vector<brls::View*> m_barButtons;
+};
+
+// ---- 首页 ----
+class HomeActivity : public brls::Activity {
   public:
     brls::View* createContentView() override {
-        brls::AppletFrame* frame = new brls::AppletFrame();
+        auto* frame = new brls::AppletFrame();
         frame->setTitle("DecoTV");
 
-        brls::Box* box = new brls::Box(brls::Axis::COLUMN);
+        auto* scroll = new brls::ScrollingFrame();
+        scroll->setPadding(20, 20, 20, 20);
+        auto* box = new brls::Box(brls::Axis::COLUMN);
 
-        // 主状态：大字号（UI 约束：字体不要太小）
-        brls::Label* title = new brls::Label();
-        title->setText(g_statusTitle);
-        title->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-        title->setFontSize(32.0f);
-
-        // 详情：仍保证可读
-        brls::Label* detail = new brls::Label();
-        detail->setText(g_statusDetail);
-        detail->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-        detail->setFontSize(22.0f);
-
-        box->addView(title);
-        box->addView(detail);
-
-        frame->setContentView(box);
+        if (!g_startupError.empty()) {
+            auto* lbl = new brls::Label();
+            lbl->setText("启动失败: " + g_startupError);
+            lbl->setFontSize(22);
+            box->addView(lbl);
+        } else if (g_categories.empty()) {
+            auto* lbl = new brls::Label();
+            lbl->setText("无分类数据（请检查网络）");
+            lbl->setFontSize(22);
+            box->addView(lbl);
+        } else {
+            for (auto& c : g_categories) {
+                box->addView(makeRow(c.label, "进入浏览", [c](brls::View*) {
+                    brls::Application::pushActivity(new VideoListActivity(c));
+                    return true;
+                }));
+            }
+        }
+        scroll->addView(box);
+        frame->setContentView(scroll);
         return frame;
     }
 };
@@ -68,46 +228,23 @@ int main(int argc, char* argv[]) {
 
     brls::Application::createWindow("DecoTV");
     brls::Application::setGlobalQuit(true);   // [+] 全局退出
-
-    // 中文字体 fallback（须在 init 之后、渲染文本之前）
     setupChineseFont();
 
-    // ---- P2 网络自检：登录 + 拉分类 ----
+    // ---- 启动自检：登录 + 拉分类 ----
     if (!decotv::initNetwork()) {
-        g_statusTitle = "Network init failed";
-        g_statusDetail = "init result: " + std::to_string(decotv::g_netInitResult);
+        g_startupError = "Network init failed: " + std::to_string(decotv::g_netInitResult);
     } else {
-        bool ok = false;
-        bool freshLogin = false;
-        decotv::HttpResponse loginResp;
-        if (decotv::hasSavedLogin()) {
-            ok = true;  // 复用已有 cookie
+        bool ok = decotv::hasSavedLogin() ? true
+                                          : decotv::login(decotv::LOGIN_USER, decotv::LOGIN_PASS);
+        if (!ok) {
+            g_startupError = "Login failed";
         } else {
-            g_statusTitle = "Logging in...";
-            freshLogin = true;
-            ok = decotv::login(decotv::LOGIN_USER, decotv::LOGIN_PASS, &loginResp);
-        }
-
-        if (ok) {
-            decotv::HttpResponse catResp;
-            auto cats = decotv::fetchCategories(&catResp);
-            g_statusTitle = freshLogin ? "Login OK, cookie saved" : "Cookie reused";
-            if (!cats.empty()) {
-                std::string names;
-                for (const auto& c : cats) names += c.label + "  ";
-                g_statusDetail = "Categories(" + std::to_string(cats.size()) + "): " + names;
-            } else {
-                g_statusDetail = "Categories failed: HTTP " + std::to_string(catResp.status) +
-                                 " curl " + std::to_string(catResp.curlError);
-            }
-        } else {
-            g_statusTitle = "Login failed";
-            g_statusDetail = "HTTP " + std::to_string(loginResp.status) +
-                             " curl " + std::to_string(loginResp.curlError);
+            g_categories = decotv::fetchCategories();
+            if (g_categories.empty()) g_startupError = "Categories empty";
         }
     }
 
-    brls::Application::pushActivity(new StartupActivity());
+    brls::Application::pushActivity(new HomeActivity());
 
     while (brls::Application::mainLoop())
         ;
