@@ -44,6 +44,22 @@ struct VideoItem {
     std::string year;
 };
 
+// TVBox 播放源（GET /api/search/resources 返回；api 为源站提供接口，多为 https）
+struct TvboxSource {
+    std::string key;   // 源标识，如 "360zy"
+    std::string name;  // 显示名，如 "TV-360资源"
+    std::string api;   // 源 API 地址，如 https://360zy.com/api.php/provide/vod
+};
+
+// TVBox 源搜索结果（直调源 API：GET {api}?wd=关键词&ac=detail）
+struct TvboxHit {
+    std::string sourceKey;   // 命中源 key
+    std::string sourceName;  // 命中源显示名
+    std::string vodId;       // 资源站视频 id（/api/detail 需要，P4b 用）
+    std::string vodName;     // 资源站片名（可能含年份）
+    std::string playUrl;     // 第一个播放地址（m3u8/mp4）
+};
+
 // 网络初始化：sdmc（cookie 持久化）+ socket + curl 全局。返回是否成功
 // 注意：borealis 的 userAppInit 已初始化过 socket，二次调用会返回
 //       AlreadyInitialized——此时视为成功（socket 已就绪）
@@ -68,6 +84,14 @@ std::vector<Category> fetchCategories(HttpResponse* out = nullptr);
 std::vector<VideoItem> fetchDoubanList(const std::string& kind, const std::string& category,
                                        const std::string& type, int limit, int start,
                                        HttpResponse* out = nullptr);
+
+// GET /api/search/resources（带 cookie）→ 全部 TVBox 播放源
+std::vector<TvboxSource> fetchTvboxSources(HttpResponse* out = nullptr);
+
+// 直调 TVBox 源 API 搜索（https）：GET {api}?wd={keyword}&ac=detail
+// 一次拿到 资源站id + 播放地址（m3u8/mp4）。PlayUrl 为空 = 该源未收录或无地址
+std::vector<TvboxHit> searchTvboxSource(const TvboxSource& src, const std::string& keyword,
+                                        HttpResponse* out = nullptr);
 
 // 内部 GET helper：结果写入 out（body/status/curlError）；传输失败自动重试 3 次
 void httpGet(const std::string& url, bool withCookies, HttpResponse* out);
