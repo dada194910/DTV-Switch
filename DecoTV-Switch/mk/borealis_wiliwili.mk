@@ -13,7 +13,9 @@
 #   - LIBS 含 -lnx
 #   - dk_renderer.hpp 已自带 <optional>；switch_ime 不再用 swkbdConfigSetStringLenMaxExt
 #---------------------------------------------------------------------------------
-current_dir := $(BOREALIS_PATH)
+# borealis 仓库根在 $(BOREALIS_PATH)（= library/borealis），其源码在仓库的
+# library/ 子目录（lib/ + include/）—— 所以 current_dir 要带 /library
+current_dir := $(BOREALIS_PATH)/library
 
 LIBS := -ldeko3d -lnx -lm $(LIBS)
 
