@@ -192,14 +192,15 @@ class VideoListActivity : public brls::Activity {
 };
 
 // ---- 首页 ----
+// v1.11：启动路径完全复刻 v1.08 已验证结构（AppletFrame + Box + Label 纯显示，
+// 无 ScrollingFrame / 无 setFocusable / 无 registerClickAction），先恢复"能启动"。
+// 元凶定位：若本版能启动 → 崩在 v1.09 新引入的上述 API；若仍崩 → 内存/环境问题（高内存模式 + crash report）
 class HomeActivity : public brls::Activity {
   public:
     brls::View* createContentView() override {
         auto* frame = new brls::AppletFrame();
         frame->setTitle("DecoTV");
 
-        auto* scroll = new brls::ScrollingFrame();
-        scroll->setPadding(20, 20, 20, 20);
         auto* box = new brls::Box(brls::Axis::COLUMN);
 
         if (!g_startupError.empty()) {
@@ -214,14 +215,14 @@ class HomeActivity : public brls::Activity {
             box->addView(lbl);
         } else {
             for (auto& c : g_categories) {
-                box->addView(makeRow(c.label, "进入浏览", [c](brls::View*) {
-                    brls::Application::pushActivity(new VideoListActivity(c));
-                    return true;
-                }));
+                auto* lbl = new brls::Label();
+                lbl->setText("▶ " + c.label);
+                lbl->setFontSize(28);  // 分类名大字号，保证可读
+                box->addView(lbl);
             }
         }
-        scroll->addView(box);
-        frame->setContentView(scroll);
+
+        frame->setContentView(box);
         return frame;
     }
 };
