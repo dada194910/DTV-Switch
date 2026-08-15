@@ -23,18 +23,21 @@ if [ ! -s /data/DecoTV-Switch/include/nlohmann/json.hpp ]; then
         -o /data/DecoTV-Switch/include/nlohmann/json.hpp
 fi
 
-echo "==> Fetching borealis (xfangfang fork, wiliwili branch @5f08b286, deko3d backend) ..."
+echo "==> Fetching borealis (xfangfang fork @5f08b286 tarball, deko3d backend) ..."
+# 用 tarball 快照而非 git clone：CI 容器里 git clone 曾被观察到工作区不完整
+# （switch-libpulsar/deps.mk 缺失导致 include 失败），tarball 是 5f08b286 的
+# 权威完整快照（switch-libpulsar/nanovg/libromfs 等全部 vendored 在内）
 cd /data/DecoTV-Switch
-if [ ! -d library/borealis/.git ]; then
-    mkdir -p library
-    git clone https://github.com/xfangfang/borealis.git library/borealis
-    cd library/borealis
-    git checkout 5f08b286f3df737f3321d2247a6fe633fcead03c
-    cd /data/DecoTV-Switch
-    # 无需子模块：switch-libpulsar/nanovg/libromfs 等全部 vendored 在仓库内
-    # （.gitmodules 里的 glfw/SDL 是 PC 端用的，Switch 构建不需要）
-    # 无补丁需求：dk_renderer.hpp 已含 <optional>；switch_ime 已不用 swkbdConfigSetStringLenMaxExt
+if [ ! -d library/borealis/library ]; then
+    mkdir -p library /tmp/xb
+    curl -sL -H "User-Agent: DecoTV-CI" -m 120 -o /tmp/xb.tar.gz \
+        "https://api.github.com/repos/xfangfang/borealis/tarball/5f08b286f3df737f3321d2247a6fe633fcead03c"
+    tar -xzf /tmp/xb.tar.gz -C /tmp/xb
+    mv /tmp/xb/borealis-* library/borealis
 fi
+echo "==> borealis 就绪检查:"
+ls library/borealis/library/lib/extern/switch-libpulsar/deps.mk && echo "  deps.mk OK"
+ls library/borealis/resources/font/ >/dev/null && echo "  resources OK"
 
 echo "==> Building (classic devkitPro Makefile + borealis) ..."
 cd /data/DecoTV-Switch
