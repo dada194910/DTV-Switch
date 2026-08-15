@@ -22,8 +22,13 @@ struct Category {
 };
 
 // 网络初始化：sdmc（cookie 持久化）+ socket + curl 全局。返回是否成功
+// 注意：borealis 的 userAppInit 已初始化过 socket，二次调用会返回
+//       AlreadyInitialized——此时视为成功（socket 已就绪）
 bool initNetwork();
 void exitNetwork();
+
+// 最近一次网络初始化的详细结果码（用于界面排错显示）
+extern unsigned int g_netInitResult;
 
 // 是否已存在登录 cookie 文件（下次启动可静默复用）
 bool hasSavedLogin();
