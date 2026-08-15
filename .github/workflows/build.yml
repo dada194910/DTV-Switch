@@ -23,3 +23,11 @@ jobs:
         with:
           name: DecoTV-nro
           path: DecoTV-Switch/DecoTV_v*.nro
+
+      # 附带 .elf（含调试符号）：真机崩溃时大气层 crash report 的偏移可用
+      # addr2line 符号化，精确定位崩溃函数（如 2168-0001 instruction abort）
+      - name: Upload .elf
+        uses: actions/upload-artifact@v4
+        with:
+          name: DecoTV-elf
+          path: DecoTV-Switch/DecoTV.elf
