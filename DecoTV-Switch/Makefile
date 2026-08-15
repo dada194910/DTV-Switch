@@ -1,7 +1,9 @@
 #---------------------------------------------------------------------------------
-# DecoTV Switch 客户端 — classic devkitPro Makefile（集成 borealis，deko3d 后端）
-# 蓝本：natinusala/borealis @ 20e2d33 的官方 demo Makefile（项目自身 CI 验证过的配置）
-# borealis 克隆到 library/borealis（含 switch-libpulsar 子模块）
+# DecoTV Switch 客户端 — classic devkitPro Makefile（集成 borealis）
+# borealis = xfangfang fork（wiliwili 分支 @5f08b286, deko3d 后端）
+# 该 fork 的 ScrollingFrame 稳定可用（wiliwili 真机验证），替代官方 20e2d33
+# 集成文件：mk/borealis_wiliwili.mk（因 fork 无自带 borealis.mk，按 CMake 配置适配）
+# borealis 克隆到 library/borealis（switch-libpulsar 等 vendored，无需子模块）
 #---------------------------------------------------------------------------------
 .SUFFIXES:
 #---------------------------------------------------------------------------------
@@ -27,7 +29,6 @@ APP_AUTHOR	:=	XiaoMiu
 APP_VERSION	:=	$(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
 # borealis 配置：BOREALIS_PATH 必须为相对 TOPDIR 的路径
-# （borealis.mk 内部用 $(TOPDIR)/$(current_dir)/... 拼 libpulsar 的 deps.mk）
 BOREALIS_PATH	:=	library/borealis
 # deko3d 着色器编译产物输出目录（相对 ROMFS）
 OUT_SHADERS	:=	shaders
@@ -59,9 +60,9 @@ LIBS	:= -lcurl -lnx -lz -lm
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
 #---------------------------------------------------------------------------------
-# 引入 borealis（追加源码/头文件/链接；必须在 LIBDIRS 之后）
+# 引入 borealis（xfangfang fork 适配版；追加源码/头文件/链接；必须在 LIBDIRS 之后）
 #---------------------------------------------------------------------------------
-include $(TOPDIR)/library/borealis/library/borealis.mk
+include $(TOPDIR)/mk/borealis_wiliwili.mk
 
 #---------------------------------------------------------------------------------
 # 以下为标准规则（含 borealis 的 GLSL 着色器编译），无需修改
