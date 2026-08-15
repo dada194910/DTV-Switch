@@ -10,6 +10,7 @@
 #include <borealis/core/logger.hpp>
 
 #include <sys/stat.h>
+#include <unistd.h>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -38,7 +39,7 @@ static CURL* makeHandle(std::string* outBody) {
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToString);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, outBody);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);       // 15s 超时，防卡死
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);       // 30s 总超时
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DecoTV-Switch/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -76,31 +77,46 @@ bool hasSavedLogin() {
     return stat(COOKIE_PATH, &st) == 0;
 }
 
+// ---- 执行一次请求并填 HttpResponse；返回 curl 是否成功 ----
+static bool perform(CURL* curl, HttpResponse* out) {
+    CURLcode res = curl_easy_perform(curl);
+
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    if (out) {
+        out->curlError = (int)res;
+        out->status = status;
+    }
+    return res == CURLE_OK;
+}
+
 std::string httpGet(const std::string& url, bool withCookies, long* outStatus) {
+    HttpResponse resp;
     std::string body;
     CURL* curl = makeHandle(&body);
     if (!curl) return "";
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    CURLcode res = curl_easy_perform(curl);
 
-    long status = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    // 传输失败时重试一次（Switch 端偶发 DNS/连接失败，重试常可恢复）
+    bool ok = perform(curl, &resp);
+    if (!ok) {
+        sleep(1);
+        body.clear();  // 清掉第一次可能残留的部分响应
+        brls::Logger::info("decotv: GET {} failed (curl err={}), retrying...", url, resp.curlError);
+        ok = perform(curl, &resp);
+    }
     curl_easy_cleanup(curl);
 
-    if (outStatus) *outStatus = status;
+    if (outStatus) *outStatus = resp.status;
 
-    if (res != CURLE_OK) {
-        brls::Logger::info("decotv: GET {} failed, curl err={}", url, (int)res);
-        return "";
-    }
-
-    brls::Logger::info("decotv: GET {} -> HTTP {} ({} bytes): {}",
-                       url, status, body.size(), body.substr(0, 120));
+    brls::Logger::info("decotv: GET {} -> HTTP {} (curl={}, {} bytes): {}",
+                       url, resp.status, resp.curlError, body.size(), body.substr(0, 120));
+    if (!ok) return "";
     return body;
 }
 
-bool login(const std::string& username, const std::string& password) {
+bool login(const std::string& username, const std::string& password, HttpResponse* out) {
     json reqBody;
     reqBody["username"] = username;
     reqBody["password"] = password;
@@ -119,51 +135,48 @@ bool login(const std::string& username, const std::string& password) {
     headers = curl_slist_append(headers, "Accept: application/json");
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
-    CURLcode res = curl_easy_perform(curl);
-
-    long status = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    HttpResponse resp;
+    bool ok = perform(curl, &resp);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);  // 在此把 Set-Cookie 写入 COOKIE_PATH
 
-    if (res != CURLE_OK) {
-        brls::Logger::info("decotv: login failed, curl err={}", (int)res);
-        return false;
-    }
+    if (out) *out = resp;
 
-    brls::Logger::info("decotv: login -> HTTP {} ({} bytes): {}",
-                       status, body.size(), body.substr(0, 80));
+    brls::Logger::info("decotv: login -> HTTP {} (curl={}, {} bytes): {}",
+                       resp.status, resp.curlError, body.size(), body.substr(0, 80));
+    if (!ok) return false;
 
     // 解析 {"ok":true}
     try {
-        json resp = json::parse(body);
-        if (resp.value("ok", false)) return true;
+        json j = json::parse(body);
+        if (j.value("ok", false)) return true;
     } catch (...) {
         return false;
     }
     return false;
 }
 
-std::vector<Category> fetchCategories(long* outStatus) {
-    std::vector<Category> out;
-    long status = 0;
-    std::string body = httpGet(std::string(BASE_URL) + "/api/categories", true, &status);
-    if (outStatus) *outStatus = status;
-    if (body.empty()) return out;
+std::vector<Category> fetchCategories(HttpResponse* out) {
+    std::vector<Category> result;
+    HttpResponse resp;
+    std::string body = httpGet(std::string(BASE_URL) + "/api/categories", true, &resp.status);
+    resp.body = body;
+    if (out) *out = resp;
+    if (body.empty()) return result;
 
     try {
-        json resp = json::parse(body);
-        if (!resp.contains("categories") || !resp["categories"].is_array()) return out;
-        for (auto& c : resp["categories"]) {
+        json j = json::parse(body);
+        if (!j.contains("categories") || !j["categories"].is_array()) return result;
+        for (auto& c : j["categories"]) {
             Category cat;
             cat.key   = c.value("key", "");
             cat.label = c.value("label", "");
-            if (!cat.key.empty()) out.push_back(std::move(cat));
+            if (!cat.key.empty()) result.push_back(std::move(cat));
         }
     } catch (...) {
-        return out;
+        return result;
     }
-    return out;
+    return result;
 }
 
 }  // namespace decotv
