@@ -17,7 +17,7 @@ class StartupActivity : public brls::Activity {
         brls::AppletFrame* frame = new brls::AppletFrame();
         frame->setTitle("DecoTV");
 
-        brls::Box* box = new brls::Box(brls::Axis::AXIS_Y);
+        brls::Box* box = new brls::Box(brls::Axis::COLUMN);
 
         // 主状态：大字号（UI 约束：字体不要太小）
         brls::Label* title = new brls::Label();
