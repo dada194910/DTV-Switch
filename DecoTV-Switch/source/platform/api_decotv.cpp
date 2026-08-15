@@ -1,10 +1,13 @@
 // DecoTV Switch 客户端 —— 网络层实现
 // 实测接口（2026-08-15 沙箱 curl 验证）：
 //   POST /api/login  {"username","password"}  ->  {"ok":true} + Set-Cookie: auth=...
-//   GET  /api/categories（带 cookie）         ->  {"version":1,"categories":[{key,label,primary,secondary,filters}]}
+//   GET  /api/categories（带 cookie）         ->  {"version":1,"categories":[{key,label,...}]}
+// 无 cookie 请求 /api/categories -> HTTP 401（空响应）
 #include <switch.h>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
+
+#include <borealis/core/logger.hpp>
 
 #include <sys/stat.h>
 #include <cstring>
@@ -26,8 +29,10 @@ static size_t writeToString(void* contents, size_t size, size_t nmemb, void* use
     return total;
 }
 
-// ---- 创建 curl easy handle（统一超时/写回调）----
-static CURL* makeHandle(std::string* outBody, bool withCookies) {
+// ---- 创建 curl easy handle ----
+// cookie 采用 libcurl 推荐模式：COOKIEFILE + COOKIEJAR 指向同一文件，
+// 每个请求都"读已有 cookie + 把新 Set-Cookie 写回"，保证登录态跨请求持久
+static CURL* makeHandle(std::string* outBody) {
     CURL* curl = curl_easy_init();
     if (!curl) return nullptr;
 
@@ -38,16 +43,17 @@ static CURL* makeHandle(std::string* outBody, bool withCookies) {
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DecoTV-Switch/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
-    if (withCookies) {
-        // 载入已有 cookie（登录后复用）
-        curl_easy_setopt(curl, CURLOPT_COOKIEFILE, COOKIE_PATH);
-    }
+    // 读 + 写同一个 cookie jar（关键：登录后的 auth cookie 靠它在后续请求带上）
+    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, COOKIE_PATH);
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, COOKIE_PATH);
+
     return curl;
 }
 
 bool initNetwork() {
     // sdmc 挂载（cookie 持久化需要；libnx 4.x 用 fsdevMountSdmc，无对应 exit，进程结束自动清理）
     fsdevMountSdmc();
+    mkdir("sdmc:/switch/DecoTV", 0777);  // cookie 目录（幂等）
 
     // socket：borealis 的 userAppInit 已初始化（switch_wrapper.c），二次调用会返回
     // AlreadyInitialized，此时 socket 已就绪，视为成功
@@ -70,29 +76,37 @@ bool hasSavedLogin() {
     return stat(COOKIE_PATH, &st) == 0;
 }
 
-std::string httpGet(const std::string& url, bool withCookies) {
+std::string httpGet(const std::string& url, bool withCookies, long* outStatus) {
     std::string body;
-    CURL* curl = makeHandle(&body, withCookies);
+    CURL* curl = makeHandle(&body);
     if (!curl) return "";
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     CURLcode res = curl_easy_perform(curl);
+
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     curl_easy_cleanup(curl);
 
-    if (res != CURLE_OK) return "";
+    if (outStatus) *outStatus = status;
+
+    if (res != CURLE_OK) {
+        brls::Logger::info("decotv: GET {} failed, curl err={}", url, (int)res);
+        return "";
+    }
+
+    brls::Logger::info("decotv: GET {} -> HTTP {} ({} bytes): {}",
+                       url, status, body.size(), body.substr(0, 120));
     return body;
 }
 
 bool login(const std::string& username, const std::string& password) {
-    // 确保 cookie 目录存在
-    mkdir("sdmc:/switch/DecoTV", 0777);
-
     json reqBody;
     reqBody["username"] = username;
     reqBody["password"] = password;
 
     std::string body;
-    CURL* curl = makeHandle(&body, false);
+    CURL* curl = makeHandle(&body);
     if (!curl) return false;
 
     std::string postData = reqBody.dump();
@@ -104,14 +118,21 @@ bool login(const std::string& username, const std::string& password) {
     headers = curl_slist_append(headers, "Content-Type: application/json");
     headers = curl_slist_append(headers, "Accept: application/json");
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    // 登录成功后把 Set-Cookie 存盘
-    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, COOKIE_PATH);
 
     CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
 
-    if (res != CURLE_OK) return false;
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);  // 在此把 Set-Cookie 写入 COOKIE_PATH
+
+    if (res != CURLE_OK) {
+        brls::Logger::info("decotv: login failed, curl err={}", (int)res);
+        return false;
+    }
+
+    brls::Logger::info("decotv: login -> HTTP {} ({} bytes): {}",
+                       status, body.size(), body.substr(0, 80));
 
     // 解析 {"ok":true}
     try {
@@ -123,9 +144,11 @@ bool login(const std::string& username, const std::string& password) {
     return false;
 }
 
-std::vector<Category> fetchCategories() {
+std::vector<Category> fetchCategories(long* outStatus) {
     std::vector<Category> out;
-    std::string body = httpGet(std::string(BASE_URL) + "/api/categories", true);
+    long status = 0;
+    std::string body = httpGet(std::string(BASE_URL) + "/api/categories", true, &status);
+    if (outStatus) *outStatus = status;
     if (body.empty()) return out;
 
     try {
