@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
     // ---- P2 网络自检：登录 + 拉分类 ----
     if (!decotv::initNetwork()) {
         g_statusTitle = "Network init failed";
-        g_statusDetail = "socket/sdmc init error";
+        g_statusDetail = "init result: " + std::to_string(decotv::g_netInitResult);
     } else {
         bool ok = decotv::hasSavedLogin();
         if (!ok) {
