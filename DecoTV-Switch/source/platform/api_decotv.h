@@ -36,10 +36,10 @@ bool hasSavedLogin();
 // 登录：POST /api/login → 下发 auth cookie 持久化到 COOKIE_PATH
 bool login(const std::string& username, const std::string& password);
 
-// GET /api/categories（带 cookie）→ 分类列表
-std::vector<Category> fetchCategories();
+// GET /api/categories（带 cookie）→ 分类列表；*outStatus 传出 HTTP 状态码（可为 nullptr）
+std::vector<Category> fetchCategories(long* outStatus = nullptr);
 
-// 内部 GET helper：返回响应 body（空串表示失败）
-std::string httpGet(const std::string& url, bool withCookies);
+// 内部 GET helper：返回响应 body（空串表示失败）；*outStatus 传出 HTTP 状态码（可为 nullptr）
+std::string httpGet(const std::string& url, bool withCookies, long* outStatus = nullptr);
 
 }  // namespace decotv
