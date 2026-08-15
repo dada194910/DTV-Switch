@@ -53,4 +53,6 @@ INCLUDES := $(INCLUDES) \
 	$(current_dir)/include/borealis/extern/nanovg \
 	$(addprefix $(current_dir)/lib/extern/switch-libpulsar/, $(PLSR_INCLUDES))
 
-CXXFLAGS := $(CXXFLAGS) -DYG_ENABLE_EVENTS -fdata-sections -DBRLS_RESOURCES="\"romfs:/\""
+# BOREALIS_USE_DEKO3D：switch_platform.cpp 据此选择 SwitchVideoContext（deko3d），
+# 否则会引用 GLFWVideoContext（需额外编译 platforms/glfw，Switch 上不用）
+CXXFLAGS := $(CXXFLAGS) -DYG_ENABLE_EVENTS -fdata-sections -DBRLS_RESOURCES="\"romfs:/\"" -DBOREALIS_USE_DEKO3D
