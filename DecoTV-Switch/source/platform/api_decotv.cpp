@@ -44,8 +44,8 @@ static CURL* makeHandle(std::string* outBody, bool withCookies) {
 }
 
 bool initNetwork() {
-    // sdmc 挂载（cookie 持久化需要）
-    sdmcInit();
+    // sdmc 挂载（cookie 持久化需要；libnx 4.x 用 fsdevMountSdmc，无对应 exit，进程结束自动清理）
+    fsdevMountSdmc();
     // 网络套接字（curl 需要）
     if (R_FAILED(socketInitializeDefault())) return false;
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -55,7 +55,6 @@ bool initNetwork() {
 void exitNetwork() {
     curl_global_cleanup();
     socketExit();
-    sdmcExit();
 }
 
 bool hasSavedLogin() {
