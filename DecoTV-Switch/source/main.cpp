@@ -2,10 +2,29 @@
 // 启动时：初始化网络 → 登录（或复用已有 cookie）→ 拉分类 → 界面显示结果
 // [+] 退出：setGlobalQuit(true)
 #include <borealis.hpp>
+#include <switch.h>
 #include <string>
 #include <vector>
 
 #include "platform/api_decotv.h"
+
+// 加载系统简体中文字体并挂到 regular 的 fallback 链（否则中文渲染为乱码/方框）
+// 用 Switch 固件自带的 PlSharedFontType_ChineseSimplified，无需往 romfs 塞字体文件
+static void setupChineseFont() {
+    PlFontData font;
+    if (R_FAILED(plGetSharedFontByType(&font, PlSharedFontType_ChineseSimplified)))
+        return;
+
+    if (!brls::Application::loadFontFromMemory("chinese_simplified", font.address, font.size, false))
+        return;
+
+    int regular = brls::Application::getFont(brls::FONT_REGULAR);
+    int cjk     = brls::Application::getFont("chinese_simplified");
+    if (regular == brls::FONT_INVALID || cjk == brls::FONT_INVALID)
+        return;
+
+    nvgAddFallbackFontId(brls::Application::getNVGContext(), regular, cjk);
+}
 
 // 启动前网络自检结果（main 里填充，Activity 显示）
 static std::string g_statusTitle;   // 主状态（大字号）
@@ -49,6 +68,9 @@ int main(int argc, char* argv[]) {
 
     brls::Application::createWindow("DecoTV");
     brls::Application::setGlobalQuit(true);   // [+] 全局退出
+
+    // 中文字体 fallback（须在 init 之后、渲染文本之前）
+    setupChineseFont();
 
     // ---- P2 网络自检：登录 + 拉分类 ----
     if (!decotv::initNetwork()) {
