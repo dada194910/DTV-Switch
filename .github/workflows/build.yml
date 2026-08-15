@@ -22,4 +22,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: DecoTV-nro
-          path: DecoTV-Switch/build/DecoTV.nro
+          path: DecoTV-Switch/DecoTV.nro
