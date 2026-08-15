@@ -5,11 +5,12 @@ set -e
 
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 
-echo "==> Ensuring devkitA64 toolchain + deko3d + curl ..."
+echo "==> Ensuring devkitA64 toolchain + deko3d + glm + curl ..."
 # --needed：已安装的包直接跳过，避免每次构建重复下载（也规避 devkitPro CDN 偶发 403）
 # switch-dev 是包组（libnx / devkitA64 / switch-tools / uam 等）；borealis(deko3d) 需要 deko3d 库
-# 注意包名是 deko3d 而非 switch-deko3d；switch-curl 提供 libcurl（无外部 SSL，HTTP 直连足够）
-dkp-pacman -S --noconfirm --needed switch-dev deko3d switch-curl
+# 注意包名是 deko3d 而非 switch-deko3d；switch-glm 提供 glm 头文件（nanovg dk_renderer 需要）；
+# switch-curl 提供 libcurl（无外部 SSL，HTTP 直连足够）
+dkp-pacman -S --noconfirm --needed switch-dev deko3d switch-glm switch-curl
 
 echo "==> Ensuring git + curl (for borealis clone / json fetch) ..."
 command -v git  >/dev/null 2>&1 || pacman -S --noconfirm git
@@ -22,19 +23,17 @@ if [ ! -s /data/DecoTV-Switch/include/nlohmann/json.hpp ]; then
         -o /data/DecoTV-Switch/include/nlohmann/json.hpp
 fi
 
-echo "==> Fetching borealis (pinned to 20e2d33, deko3d backend, incl. switch-libpulsar submodule) ..."
+echo "==> Fetching borealis (xfangfang fork, wiliwili branch @5f08b286, deko3d backend) ..."
 cd /data/DecoTV-Switch
 if [ ! -d library/borealis/.git ]; then
     mkdir -p library
-    git clone --recurse-submodules https://github.com/natinusala/borealis.git library/borealis
+    git clone https://github.com/xfangfang/borealis.git library/borealis
     cd library/borealis
-    git checkout 20e2d33b6c4ffce139ce304c503c04f5b94da920
-    git submodule update --init --recursive
+    git checkout 5f08b286f3df737f3321d2247a6fe633fcead03c
     cd /data/DecoTV-Switch
-
-    # 补丁：borealis 调用了 libnx 不存在的 swkbdConfigSetStringLenMaxExt
-    # （我们暂不用软件键盘，直接剔除该调用，避免编译失败）
-    sed -i '/swkbdConfigSetStringLenMaxExt/d' library/borealis/library/lib/platforms/switch/swkbd.cpp
+    # 无需子模块：switch-libpulsar/nanovg/libromfs 等全部 vendored 在仓库内
+    # （.gitmodules 里的 glfw/SDL 是 PC 端用的，Switch 构建不需要）
+    # 无补丁需求：dk_renderer.hpp 已含 <optional>；switch_ime 已不用 swkbdConfigSetStringLenMaxExt
 fi
 
 echo "==> Building (classic devkitPro Makefile + borealis) ..."
