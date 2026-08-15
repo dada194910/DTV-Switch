@@ -91,6 +91,80 @@ static void categoryToDouban(const decotv::Category& cat, int primaryIndex,
     }
 }
 
+// ---- 详情页（P4a：直调 TVBox 源搜索，显示各源播放地址；播放 P4b 实现）----
+// 定义在 VideoListActivity 之前（后者行点击要 new 本类）
+class DetailActivity : public brls::Activity {
+  public:
+    explicit DetailActivity(decotv::VideoItem v) : m_video(std::move(v)) {}
+
+    brls::View* createContentView() override {
+        m_info = new brls::Label();
+        m_info->setFontSize(20);
+        m_info->setFocusable(true);  // 永存活焦点锚点（v1.14 教训）
+
+        m_listBox = new brls::Box(brls::Axis::COLUMN);
+
+        auto* layout = new brls::Box(brls::Axis::COLUMN);
+        layout->addView(m_info);
+        layout->addView(m_listBox);
+
+        auto* frame = new brls::AppletFrame(layout);
+        frame->setTitle("DecoTV - " + m_video.title);
+        frame->registerAction("返回", brls::ControllerButton::BUTTON_B, [](brls::View*) {
+            brls::Application::popActivity();
+            return true;
+        });
+
+        load();
+        return frame;
+    }
+
+  private:
+    void load() {
+        // 焦点安全：删行前转移到保活锚点（v1.14 教训）
+        brls::Application::giveFocus(m_info);
+        for (auto* r : m_rows) m_listBox->removeView(r);
+        m_rows.clear();
+
+        m_info->setText("正在搜索各播放源...");
+
+        // 拉源列表，搜前几个源（顺序同步请求，够用）
+        auto sources = decotv::fetchTvboxSources();
+        int count = 0;
+        int limit = (int)sources.size() < 6 ? (int)sources.size() : 6;
+
+        for (int i = 0; i < limit; ++i) {
+            auto hits = decotv::searchTvboxSource(sources[i], m_video.title);
+            for (auto& h : hits) {
+                std::string sub = h.playUrl;
+                if (sub.size() > 48) sub = sub.substr(0, 48) + "...";
+                auto* row = makeRow(h.sourceName + "  " + h.vodName, sub, [h](brls::View*) {
+                    brls::Application::notify("播放将在 P4b 实现: " + h.playUrl);
+                    return true;
+                });
+                m_listBox->addView(row);
+                m_rows.push_back(row);
+                ++count;
+            }
+        }
+
+        if (count == 0) {
+            auto* lbl = new brls::Label();
+            lbl->setText("未找到可用播放源（或网络失败）");
+            lbl->setFontSize(22);
+            m_listBox->addView(lbl);
+            m_rows.push_back(lbl);
+        }
+        m_info->setText("找到 " + std::to_string(count) + " 个播放源  A 选中  B 返回");
+        if (!m_rows.empty()) brls::Application::giveFocus(m_rows[0]);
+    }
+
+    decotv::VideoItem m_video;
+    brls::Label* m_info = nullptr;
+    brls::Box* m_listBox = nullptr;
+    std::vector<brls::View*> m_rows;
+};
+
 // ---- 影片列表页 ----
 class VideoListActivity : public brls::Activity {
   public:
@@ -189,7 +263,7 @@ class VideoListActivity : public brls::Activity {
                 if (!sub.empty() && !v.rate.empty()) sub += "  ⭐" + v.rate;
                 else if (!v.rate.empty()) sub = "⭐" + v.rate;
                 auto* row = makeRow(v.title, sub, [v](brls::View*) {
-                    brls::Application::notify("详情/选源/播放 将在 P4 实现");
+                    brls::Application::pushActivity(new DetailActivity(v));
                     return true;
                 });
                 m_listBox->addView(row);
