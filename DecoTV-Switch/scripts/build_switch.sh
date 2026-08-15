@@ -10,14 +10,9 @@ echo "==> Ensuring devkitA64 toolchain (libnx, switch-tools) ..."
 # devkita64 镜像已内置大部分，这里幂等补装
 dkp-pacman -S --noconfirm switch-dev
 
-echo "==> Configuring (CMake, Switch toolchain) ..."
+echo "==> Building (classic devkitPro Makefile) ..."
 cd /data/DecoTV-Switch
-mkdir -p build
-cd build
-cmake -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/Switch.cmake" ..
-
-echo "==> Building ..."
 make -j"$(nproc)"
 
 echo "==> Done. Artifact:"
-ls -lh /data/DecoTV-Switch/build/DecoTV.nro
+ls -lh /data/DecoTV-Switch/DecoTV.nro
