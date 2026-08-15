@@ -97,24 +97,6 @@ class VideoListActivity : public brls::Activity {
     explicit VideoListActivity(decotv::Category c) : m_cat(std::move(c)) {}
 
     brls::View* createContentView() override {
-        auto* frame = new brls::AppletFrame();
-        frame->setTitle("DecoTV - " + m_cat.label);
-        frame->registerAction("返回", brls::ControllerButton::BUTTON_B, [](brls::View*) {
-            brls::Application::popActivity();
-            return true;
-        });
-        // 翻页注册在 frame 上（v1.12：不再用 ScrollingFrame——它是 v1.09 启动崩溃元凶，
-        // 列表改为小分页 Box，每页 8 条一屏显示完，左右键翻页）
-        frame->registerAction("上一页", brls::ControllerButton::BUTTON_LEFT, [this](brls::View*) {
-            if (m_page > 0) { m_page--; loadPage(); }
-            return true;
-        });
-        frame->registerAction("下一页", brls::ControllerButton::BUTTON_RIGHT, [this](brls::View*) {
-            m_page++;
-            loadPage();
-            return true;
-        });
-
         m_info = new brls::Label();
         m_info->setFontSize(20);
 
@@ -140,7 +122,25 @@ class VideoListActivity : public brls::Activity {
         layout->addView(m_info);
         layout->addView(m_primaryBar);
         layout->addView(m_listBox);
-        frame->setContentView(layout);
+
+        // wiliwili 分支 AppletFrame::setContentView 是 protected，改用构造传参
+        auto* frame = new brls::AppletFrame(layout);
+        frame->setTitle("DecoTV - " + m_cat.label);
+        frame->registerAction("返回", brls::ControllerButton::BUTTON_B, [](brls::View*) {
+            brls::Application::popActivity();
+            return true;
+        });
+        // 翻页注册在 frame 上（v1.12 起不用 ScrollingFrame——它是 20e2d33 启动崩溃元凶；
+        // 切 xfangfang fork 后 ScrollingFrame 可用，后续 P3 列表可升级为滚动）
+        frame->registerAction("上一页", brls::ControllerButton::BUTTON_LEFT, [this](brls::View*) {
+            if (m_page > 0) { m_page--; loadPage(); }
+            return true;
+        });
+        frame->registerAction("下一页", brls::ControllerButton::BUTTON_RIGHT, [this](brls::View*) {
+            m_page++;
+            loadPage();
+            return true;
+        });
 
         loadPage();
         return frame;
@@ -205,9 +205,6 @@ class VideoListActivity : public brls::Activity {
 class HomeActivity : public brls::Activity {
   public:
     brls::View* createContentView() override {
-        auto* frame = new brls::AppletFrame();
-        frame->setTitle("DecoTV");
-
         auto* box = new brls::Box(brls::Axis::COLUMN);
 
         if (!g_startupError.empty()) {
@@ -229,13 +226,15 @@ class HomeActivity : public brls::Activity {
             }
         }
 
-        frame->setContentView(box);
+        // wiliwili 分支 AppletFrame::setContentView 是 protected，改用构造传参
+        auto* frame = new brls::AppletFrame(box);
+        frame->setTitle("DecoTV");
         return frame;
     }
 };
 
 int main(int argc, char* argv[]) {
-    brls::Logger::setLogLevel(brls::LogLevel::INFO);
+    brls::Logger::setLogLevel(brls::LogLevel::LOG_INFO);
 
     if (!brls::Application::init()) {
         brls::Logger::error("Unable to init Borealis application");
