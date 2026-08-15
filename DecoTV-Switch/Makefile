@@ -25,7 +25,8 @@ ROMFS		:=
 
 APP_TITLE	:=	DecoTV
 APP_AUTHOR	:=	XiaoMiu
-APP_VERSION	:=	0.1.0
+# 版本号从 VERSION 文件读取（铁律：每次构建递增），格式如 1.00 / 1.01
+APP_VERSION	:=	$(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
 #---------------------------------------------------------------------------------
 # 代码生成选项
