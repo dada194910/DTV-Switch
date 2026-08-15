@@ -21,6 +21,13 @@ struct Category {
     std::string label;  // 如 "电影"
 };
 
+// HTTP 请求结果（用于界面排错显示）
+struct HttpResponse {
+    long status = 0;      // HTTP 状态码；0 = 未收到响应（传输失败）
+    int curlError = 0;    // curl 错误码（CURLE_OK=0 无错误；6=DNS 失败 7=连接拒绝 28=超时 56=接收错误）
+    std::string body;
+};
+
 // 网络初始化：sdmc（cookie 持久化）+ socket + curl 全局。返回是否成功
 // 注意：borealis 的 userAppInit 已初始化过 socket，二次调用会返回
 //       AlreadyInitialized——此时视为成功（socket 已就绪）
@@ -34,10 +41,11 @@ extern unsigned int g_netInitResult;
 bool hasSavedLogin();
 
 // 登录：POST /api/login → 下发 auth cookie 持久化到 COOKIE_PATH
-bool login(const std::string& username, const std::string& password);
+// *out 可空：传出登录请求的 HTTP 结果（排错用）
+bool login(const std::string& username, const std::string& password, HttpResponse* out = nullptr);
 
-// GET /api/categories（带 cookie）→ 分类列表；*outStatus 传出 HTTP 状态码（可为 nullptr）
-std::vector<Category> fetchCategories(long* outStatus = nullptr);
+// GET /api/categories（带 cookie）→ 分类列表；*out 可空：传出请求结果（排错用）
+std::vector<Category> fetchCategories(HttpResponse* out = nullptr);
 
 // 内部 GET helper：返回响应 body（空串表示失败）；*outStatus 传出 HTTP 状态码（可为 nullptr）
 std::string httpGet(const std::string& url, bool withCookies, long* outStatus = nullptr);
