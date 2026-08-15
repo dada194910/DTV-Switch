@@ -6,10 +6,10 @@ set -e
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 
 echo "==> Ensuring devkitA64 toolchain + deko3d + curl ..."
+# --needed：已安装的包直接跳过，避免每次构建重复下载（也规避 devkitPro CDN 偶发 403）
 # switch-dev 是包组（libnx / devkitA64 / switch-tools / uam 等）；borealis(deko3d) 需要 deko3d 库
-# 注意包名是 deko3d 而非 switch-deko3d（且 switch-dev 组已含 deko3d，此处幂等补装）
-# switch-curl 提供 libcurl（无外部 SSL，HTTP 直连足够）
-dkp-pacman -S --noconfirm switch-dev deko3d switch-curl
+# 注意包名是 deko3d 而非 switch-deko3d；switch-curl 提供 libcurl（无外部 SSL，HTTP 直连足够）
+dkp-pacman -S --noconfirm --needed switch-dev deko3d switch-curl
 
 echo "==> Ensuring git + curl (for borealis clone / json fetch) ..."
 command -v git  >/dev/null 2>&1 || pacman -S --noconfirm git
