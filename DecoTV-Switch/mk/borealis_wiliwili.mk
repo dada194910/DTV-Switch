@@ -47,6 +47,7 @@ INCLUDES := $(INCLUDES) \
 	$(current_dir)/lib/extern/libromfs/lib/include \
 	$(current_dir)/include/borealis/extern \
 	$(current_dir)/include/borealis/extern/tinyxml2 \
+	$(current_dir)/include/borealis/extern/nanovg \
 	$(addprefix $(current_dir)/lib/extern/switch-libpulsar/, $(PLSR_INCLUDES))
 
 CXXFLAGS := $(CXXFLAGS) -DYG_ENABLE_EVENTS -fdata-sections -DBRLS_RESOURCES="\"romfs:/\""
