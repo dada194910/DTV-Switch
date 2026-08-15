@@ -5,12 +5,22 @@ set -e
 
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 
-echo "==> Ensuring devkitA64 toolchain (libnx, switch-tools) ..."
-# switch-dev 是包组（libnx / devkitA64 / switch-tools 等 13 个包）
-# devkita64 镜像已内置大部分，这里幂等补装
-dkp-pacman -S --noconfirm switch-dev
+echo "==> Ensuring devkitA64 toolchain + borealis deps ..."
+# switch-dev 是包组（libnx / devkitA64 / switch-tools 等）
+# borealis 需要 switch-glfw / switch-mesa / switch-glm（装到 portlibs/switch）
+dkp-pacman -S --noconfirm switch-dev switch-glfw switch-mesa switch-glm
 
-echo "==> Building (classic devkitPro Makefile) ..."
+echo "==> Ensuring git (for borealis clone) ..."
+command -v git >/dev/null 2>&1 || pacman -S --noconfirm git
+
+echo "==> Fetching borealis (natinusala/borealis) ..."
+cd /data/DecoTV-Switch
+if [ ! -d library/borealis/.git ]; then
+    mkdir -p library
+    git clone --depth 1 https://github.com/natinusala/borealis.git library/borealis
+fi
+
+echo "==> Building (classic devkitPro Makefile + borealis) ..."
 cd /data/DecoTV-Switch
 make -j"$(nproc)"
 
