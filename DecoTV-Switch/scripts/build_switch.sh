@@ -14,5 +14,9 @@ echo "==> Building (classic devkitPro Makefile) ..."
 cd /data/DecoTV-Switch
 make -j"$(nproc)"
 
-echo "==> Done. Artifact:"
-ls -lh /data/DecoTV-Switch/DecoTV.nro
+echo "==> Tagging versioned artifact ..."
+VERSION=$(cat /data/DecoTV-Switch/VERSION 2>/dev/null || echo "0.1.0")
+cp /data/DecoTV-Switch/DecoTV.nro "/data/DecoTV-Switch/DecoTV_v${VERSION}.nro"
+
+echo "==> Done. Artifacts:"
+ls -lh /data/DecoTV-Switch/DecoTV.nro /data/DecoTV-Switch/DecoTV_v${VERSION}.nro
