@@ -19,7 +19,7 @@ current_dir := $(BOREALIS_PATH)/library
 
 LIBS := -ldeko3d -lnx -lm $(LIBS)
 
-include $(TOPDIR)/$(BOREALIS_PATH)/lib/extern/switch-libpulsar/deps.mk
+include $(TOPDIR)/$(current_dir)/lib/extern/switch-libpulsar/deps.mk
 
 SOURCES := $(SOURCES) \
 	$(current_dir)/lib/core \
