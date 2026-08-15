@@ -84,14 +84,15 @@ int main(int argc, char* argv[]) {
         }
 
         if (ok) {
-            auto cats = decotv::fetchCategories();
+            long catStatus = 0;
+            auto cats = decotv::fetchCategories(&catStatus);
             g_statusTitle = "Login OK, cookie saved";
             if (!cats.empty()) {
                 std::string names;
                 for (const auto& c : cats) names += c.label + "  ";
                 g_statusDetail = "Categories(" + std::to_string(cats.size()) + "): " + names;
             } else {
-                g_statusDetail = "Categories fetch failed";
+                g_statusDetail = "Categories fetch failed (HTTP " + std::to_string(catStatus) + ")";
             }
         } else {
             g_statusTitle = "Login failed";
