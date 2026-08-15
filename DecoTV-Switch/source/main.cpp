@@ -1,11 +1,12 @@
 // DecoTV Switch 客户端 —— 最小可运行版（libnx-only）
 // 目标：验证整条链路（交叉编译 -> .nro -> 真机显示 -> 按键 -> 退出）
 // 屏幕打印服务器地址横幅；按 [+] 键退出
-// 注意：libnx 4.x 已移除经典 HID API（hidScanInput/hidKeysDown/KEY_*），
-//       使用新版 HidNpad API：
-//       - hidInitialize() 只在启动时初始化基础服务+共享内存，**不激活 Npad**，
-//         必须再显式调用 hidInitializeNpad() 才能读到按键
-//       - 掌机模式按键 id 是 HidNpadIdType_Handheld(0x20)，不是 No1
+//
+// 输入采用 libnx 官方推荐方式：pad.h 抽象层
+// （参照 switch-examples/hid/read-controls 官方示例）
+// - padInitialize 内部会自动激活 Npad 子系统（hidInitializeNpad）
+// - padUpdate 内部自动处理掌机(Handheld)/Pro(FullKey)/分离双 Joy-Con(JoyDual/Left/Right) 全部形态
+// - 直接戳 hidGetNpadStates* 底层 API 容易踩连接检查/激活时序的坑，官方 pad 层已封装
 #include <switch.h>
 #include <cstdio>
 
@@ -21,32 +22,17 @@ int main(int argc, char* argv[]) {
     printf("\x1b[20;6H");
     printf("Press [+] to exit\n");
 
-    // 初始化 HID（新版 libnx API）
-    hidInitialize();
-    // 激活 Npad 子系统——hidInitialize() 不会激活它，缺了这行读不到任何按键
-    hidInitializeNpad();
+    // 配置输入：单玩家 + 标准手柄样式（FullKey/Handheld/JoyDual/JoyLeft/JoyRight）
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    // 默认手柄：自动涵盖掌机模式输入 + 第一台已连接手柄
+    PadState pad;
+    padInitializeDefault(&pad);
 
     // 主循环：[+] 退出
-    // 兼容三种形态：Pro 手柄(FullKey@No1) / 掌机(Handheld@0x20) / 分离双 Joy-Con(JoyDual@No1)
     while (appletMainLoop()) {
-        bool exitRequested = false;
-
-        HidNpadFullKeyState fkState;
-        if (hidGetNpadStatesFullKey(HidNpadIdType_No1, &fkState, 1) > 0 &&
-            (fkState.buttons & HidNpadButton_Plus))
-            exitRequested = true;
-
-        HidNpadHandheldState hhState;
-        if (hidGetNpadStatesHandheld(HidNpadIdType_Handheld, &hhState, 1) > 0 &&
-            (hhState.buttons & HidNpadButton_Plus))
-            exitRequested = true;
-
-        HidNpadJoyDualState jdState;
-        if (hidGetNpadStatesJoyDual(HidNpadIdType_No1, &jdState, 1) > 0 &&
-            (jdState.buttons & HidNpadButton_Plus))
-            exitRequested = true;
-
-        if (exitRequested) break;
+        padUpdate(&pad);
+        u64 kDown = padGetButtonsDown(&pad);
+        if (kDown & HidNpadButton_Plus) break;
         consoleUpdate(nullptr);
     }
 
