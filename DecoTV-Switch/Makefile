@@ -42,7 +42,9 @@ CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
-CXXFLAGS	:= $(CFLAGS) -std=c++1z -O2 -Wno-volatile
+# -include optional: nanovg-deko3d 的 dk_renderer.hpp 用了 std::optional 但没 #include <optional>
+# （borealis 自身 CI 靠传递包含碰巧可用，GCC 15 下必现编译错误，这里强制预包含兜底）
+CXXFLAGS	:= $(CFLAGS) -std=c++1z -O2 -Wno-volatile -include optional
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
