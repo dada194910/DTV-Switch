@@ -11,6 +11,8 @@
 
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -22,6 +24,21 @@ namespace decotv {
 using json = nlohmann::json;
 
 unsigned int g_netInitResult = 0;
+
+// ---- URL 编码（中文参数如 热门/豆瓣高分 需要）----
+static std::string urlEncode(const std::string& s) {
+    std::string out;
+    for (unsigned char c : s) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            out += (char)c;
+        } else {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%%%02X", c);
+            out += buf;
+        }
+    }
+    return out;
+}
 
 // ---- curl 写回调：把响应体追加进 std::string ----
 static size_t writeToString(void* contents, size_t size, size_t nmemb, void* userp) {
@@ -176,7 +193,50 @@ std::vector<Category> fetchCategories(HttpResponse* out) {
             Category cat;
             cat.key   = c.value("key", "");
             cat.label = c.value("label", "");
-            if (!cat.key.empty()) result.push_back(std::move(cat));
+            if (cat.key.empty()) continue;
+            // primary: [{label, value}]
+            if (c.contains("primary") && c["primary"].is_array()) {
+                for (auto& p : c["primary"]) {
+                    PrimaryTab tab;
+                    tab.label = p.value("label", "");
+                    tab.value = p.value("value", "");
+                    if (!tab.value.empty()) cat.primary.push_back(std::move(tab));
+                }
+            }
+            result.push_back(std::move(cat));
+        }
+    } catch (...) {
+        return result;
+    }
+    return result;
+}
+
+std::vector<VideoItem> fetchDoubanList(const std::string& kind, const std::string& category,
+                                       const std::string& type, int limit, int start,
+                                       HttpResponse* out) {
+    std::vector<VideoItem> result;
+    HttpResponse resp;
+
+    std::string url = std::string(BASE_URL) + "/api/douban/categories?kind=" + urlEncode(kind) +
+                      "&category=" + urlEncode(category) +
+                      "&type=" + urlEncode(type) +
+                      "&limit=" + std::to_string(limit) +
+                      "&start=" + std::to_string(start);
+    httpGet(url, true, &resp);
+    if (out) *out = resp;
+    if (resp.body.empty()) return result;
+
+    try {
+        json j = json::parse(resp.body);
+        if (!j.contains("list") || !j["list"].is_array()) return result;
+        for (auto& item : j["list"]) {
+            VideoItem v;
+            v.id    = item.value("id", "");
+            v.title = item.value("title", "");
+            v.poster = item.value("poster", "");
+            v.rate  = item.value("rate", "");
+            v.year  = item.value("year", "");
+            if (!v.title.empty()) result.push_back(std::move(v));
         }
     } catch (...) {
         return result;
