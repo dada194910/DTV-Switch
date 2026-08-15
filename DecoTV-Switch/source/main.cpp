@@ -77,26 +77,33 @@ int main(int argc, char* argv[]) {
         g_statusTitle = "Network init failed";
         g_statusDetail = "init result: " + std::to_string(decotv::g_netInitResult);
     } else {
-        bool ok = decotv::hasSavedLogin();
-        if (!ok) {
+        bool ok = false;
+        bool freshLogin = false;
+        decotv::HttpResponse loginResp;
+        if (decotv::hasSavedLogin()) {
+            ok = true;  // 复用已有 cookie
+        } else {
             g_statusTitle = "Logging in...";
-            ok = decotv::login(decotv::LOGIN_USER, decotv::LOGIN_PASS);
+            freshLogin = true;
+            ok = decotv::login(decotv::LOGIN_USER, decotv::LOGIN_PASS, &loginResp);
         }
 
         if (ok) {
-            long catStatus = 0;
-            auto cats = decotv::fetchCategories(&catStatus);
-            g_statusTitle = "Login OK, cookie saved";
+            decotv::HttpResponse catResp;
+            auto cats = decotv::fetchCategories(&catResp);
+            g_statusTitle = freshLogin ? "Login OK, cookie saved" : "Cookie reused";
             if (!cats.empty()) {
                 std::string names;
                 for (const auto& c : cats) names += c.label + "  ";
                 g_statusDetail = "Categories(" + std::to_string(cats.size()) + "): " + names;
             } else {
-                g_statusDetail = "Categories fetch failed (HTTP " + std::to_string(catStatus) + ")";
+                g_statusDetail = "Categories failed: HTTP " + std::to_string(catResp.status) +
+                                 " curl " + std::to_string(catResp.curlError);
             }
         } else {
             g_statusTitle = "Login failed";
-            g_statusDetail = "Check server: " + std::string(decotv::BASE_URL);
+            g_statusDetail = "HTTP " + std::to_string(loginResp.status) +
+                             " curl " + std::to_string(loginResp.curlError);
         }
     }
 
