@@ -1,7 +1,7 @@
 #---------------------------------------------------------------------------------
-# DecoTV Switch 客户端 — 经典 devkitPro Makefile 构建（集成 borealis UI）
-# 蓝本：switchbrew/nx-hbmenu 的 Makefile.nx + natinusala/borealis 示例 Makefile
-# 依赖 $(DEVKITPRO)/libnx/switch_rules，自动完成编译/链接/nacp/nro 打包
+# DecoTV Switch 客户端 — classic devkitPro Makefile（集成 borealis，deko3d 后端）
+# 蓝本：natinusala/borealis @ 20e2d33 的官方 demo Makefile（项目自身 CI 验证过的配置）
+# borealis 克隆到 library/borealis（含 switch-libpulsar 子模块）
 #---------------------------------------------------------------------------------
 .SUFFIXES:
 #---------------------------------------------------------------------------------
@@ -12,9 +12,6 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
-#---------------------------------------------------------------------------------
-# TARGET: 输出名 | BUILD: 中间产物目录 | SOURCES: 源码目录
-# DATA: 二进制数据目录 | INCLUDES: 头文件目录 | ROMFS: romfs 资源目录(可选)
 #---------------------------------------------------------------------------------
 TARGET		:=	DecoTV
 BUILD		:=	build
@@ -29,10 +26,11 @@ APP_AUTHOR	:=	XiaoMiu
 # 版本号从 VERSION 文件读取（铁律：每次构建递增），格式如 1.00 / 1.01
 APP_VERSION	:=	$(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
-# borealis 配置
-# 用 $(TOPDIR) 而非 $(CURDIR)：子 make 阶段 CURDIR 指向 build/，TOPDIR 恒为项目根
-BOREALIS_PATH		:=	$(TOPDIR)/library/borealis
-BOREALIS_RESOURCES	:=	romfs:/
+# borealis 配置：BOREALIS_PATH 必须为相对 TOPDIR 的路径
+# （borealis.mk 内部用 $(TOPDIR)/$(current_dir)/... 拼 libpulsar 的 deps.mk）
+BOREALIS_PATH	:=	library/borealis
+# deko3d 着色器编译产物输出目录（相对 ROMFS）
+OUT_SHADERS	:=	shaders
 
 #---------------------------------------------------------------------------------
 # 代码生成选项（arch 与 borealis 示例一致；borealis 需要 RTTI/异常，去掉 -fno-*）
@@ -44,26 +42,25 @@ CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
-CXXFLAGS	:= $(CFLAGS) -std=c++1z -O2 -Wno-volatile \
-			-DBOREALIS_RESOURCES="\"$(BOREALIS_RESOURCES)\""
+CXXFLAGS	:= $(CFLAGS) -std=c++1z -O2 -Wno-volatile
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lnx -lm
+LIBS	:= -lnx
 
 #---------------------------------------------------------------------------------
-# 库目录列表（顶层含 include 和 lib）；switch-glfw/switch-mesa 装到 $(PORTLIBS)
+# 库目录列表（顶层含 include 和 lib）；switch-deko3d 装到 $(PORTLIBS)
 #---------------------------------------------------------------------------------
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
 #---------------------------------------------------------------------------------
-# 引入 borealis（追加其源码/头文件目录和 glfw/EGL 链接；必须在 LIBDIRS 之后）
+# 引入 borealis（追加源码/头文件/链接；必须在 LIBDIRS 之后）
 #---------------------------------------------------------------------------------
 include $(TOPDIR)/library/borealis/library/borealis.mk
 
 #---------------------------------------------------------------------------------
-# 以下为标准规则，除非要加新文件扩展名，否则无需修改
+# 以下为标准规则（含 borealis 的 GLSL 着色器编译），无需修改
 #---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
@@ -79,6 +76,7 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+GLSLFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.glsl)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
 #---------------------------------------------------------------------------------
@@ -100,11 +98,36 @@ export OFILES_SRC	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export OFILES 	:=	$(OFILES_BIN) $(OFILES_SRC)
 export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
 
+ifneq ($(strip $(ROMFS)),)
+	ROMFS_TARGETS :=
+	ROMFS_FOLDERS :=
+	ifneq ($(strip $(OUT_SHADERS)),)
+		ROMFS_SHADERS := $(ROMFS)/$(OUT_SHADERS)
+		ROMFS_TARGETS += $(patsubst %.glsl, $(ROMFS_SHADERS)/%.dksh, $(GLSLFILES))
+		ROMFS_FOLDERS += $(ROMFS_SHADERS)
+	endif
+
+	export ROMFS_DEPS := $(foreach file,$(ROMFS_TARGETS),$(CURDIR)/$(file))
+endif
+
 export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 			-I$(CURDIR)/$(BUILD)
 
 export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+
+ifeq ($(strip $(CONFIG_JSON)),)
+	jsons := $(wildcard *.json)
+	ifneq (,$(findstring $(TARGET).json,$(jsons)))
+		export APP_JSON := $(TOPDIR)/$(TARGET).json
+	else
+		ifneq (,$(findstring config.json,$(jsons)))
+			export APP_JSON := $(TOPDIR)/config.json
+		endif
+	endif
+else
+	export APP_JSON := $(TOPDIR)/$(CONFIG_JSON)
+endif
 
 ifeq ($(strip $(ICON)),)
 	icons := $(wildcard *.jpg)
@@ -135,19 +158,56 @@ ifneq ($(ROMFS),)
 	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: $(BUILD) clean all
+.PHONY: all clean
 
 #---------------------------------------------------------------------------------
-all: $(BUILD)
+all: $(ROMFS_TARGETS) | $(BUILD)
+	@MSYS2_ARG_CONV_EXCL="-D;$(MSYS2_ARG_CONV_EXCL)" $(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 $(BUILD):
-	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+	@mkdir -p $@
+
+ifneq ($(strip $(ROMFS_TARGETS)),)
+
+$(ROMFS_TARGETS): | $(ROMFS_FOLDERS)
+
+$(ROMFS_FOLDERS):
+	@mkdir -p $@
+
+$(ROMFS_SHADERS)/%_vsh.dksh: %_vsh.glsl
+	@echo {vert} $(notdir $<)
+	@uam -s vert -o $@ $<
+
+$(ROMFS_SHADERS)/%_tcsh.dksh: %_tcsh.glsl
+	@echo {tess_ctrl} $(notdir $<)
+	@uam -s tess_ctrl -o $@ $<
+
+$(ROMFS_SHADERS)/%_tesh.dksh: %_tesh.glsl
+	@echo {tess_eval} $(notdir $<)
+	@uam -s tess_eval -o $@ $<
+
+$(ROMFS_SHADERS)/%_gsh.dksh: %_gsh.glsl
+	@echo {geom} $(notdir $<)
+	@uam -s geom -o $@ $<
+
+$(ROMFS_SHADERS)/%_fsh.dksh: %_fsh.glsl
+	@echo {frag} $(notdir $<)
+	@uam -s frag -o $@ $<
+
+$(ROMFS_SHADERS)/%.dksh: %.glsl
+	@echo {comp} $(notdir $<)
+	@uam -s comp -o $@ $<
+
+endif
 
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+ifeq ($(strip $(APP_JSON)),)
+	@rm -fr $(BUILD) $(ROMFS_FOLDERS) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+else
+	@rm -fr $(BUILD) $(ROMFS_FOLDERS) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
+endif
 
 #---------------------------------------------------------------------------------
 else
@@ -158,12 +218,24 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 # 主目标
 #---------------------------------------------------------------------------------
-ifeq ($(strip $(NO_NACP)),)
+ifeq ($(strip $(APP_JSON)),)
+
 all	:	$(OUTPUT).nro
 
-$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
+ifeq ($(strip $(NO_NACP)),)
+$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp $(ROMFS_DEPS)
 else
-all	:	$(OUTPUT).elf
+$(OUTPUT).nro	:	$(OUTPUT).elf $(ROMFS_DEPS)
+endif
+
+else
+
+all	:	$(OUTPUT).nsp
+
+$(OUTPUT).nsp	:	$(OUTPUT).nso $(OUTPUT).npdm
+
+$(OUTPUT).nso	:	$(OUTPUT).elf
+
 endif
 
 $(OUTPUT).elf	:	$(OFILES)
