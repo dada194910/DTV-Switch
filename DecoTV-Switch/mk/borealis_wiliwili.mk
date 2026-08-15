@@ -23,8 +23,10 @@ include $(TOPDIR)/$(current_dir)/lib/extern/switch-libpulsar/deps.mk
 
 SOURCES := $(SOURCES) \
 	$(current_dir)/lib/core \
+	$(current_dir)/lib/core/touch \
 	$(current_dir)/lib/views \
 	$(current_dir)/lib/views/cells \
+	$(current_dir)/lib/views/widgets \
 	$(current_dir)/lib/platforms/switch \
 	$(current_dir)/lib/extern/nanovg \
 	$(current_dir)/lib/extern/nanovg/deko3d \
