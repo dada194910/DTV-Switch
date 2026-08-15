@@ -1,6 +1,6 @@
 #---------------------------------------------------------------------------------
-# DecoTV Switch 客户端 — 经典 devkitPro Makefile 构建
-# 蓝本：switchbrew/nx-hbmenu 的 Makefile.nx（官方标准模板）
+# DecoTV Switch 客户端 — 经典 devkitPro Makefile 构建（集成 borealis UI）
+# 蓝本：switchbrew/nx-hbmenu 的 Makefile.nx + natinusala/borealis 示例 Makefile
 # 依赖 $(DEVKITPRO)/libnx/switch_rules，自动完成编译/链接/nacp/nro 打包
 #---------------------------------------------------------------------------------
 .SUFFIXES:
@@ -21,34 +21,46 @@ BUILD		:=	build
 SOURCES		:=	source
 DATA		:=
 INCLUDES	:=	include
-ROMFS		:=
+# borealis 的 resources（字体/着色器/i18n）打进 romfs
+ROMFS		:=	library/borealis/resources
 
 APP_TITLE	:=	DecoTV
 APP_AUTHOR	:=	XiaoMiu
 # 版本号从 VERSION 文件读取（铁律：每次构建递增），格式如 1.00 / 1.01
 APP_VERSION	:=	$(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
+# borealis 配置
+# 用 $(TOPDIR) 而非 $(CURDIR)：子 make 阶段 CURDIR 指向 build/，TOPDIR 恒为项目根
+BOREALIS_PATH		:=	$(TOPDIR)/library/borealis
+BOREALIS_RESOURCES	:=	romfs:/
+
 #---------------------------------------------------------------------------------
-# 代码生成选项
+# 代码生成选项（arch 与 borealis 示例一致；borealis 需要 RTTI/异常，去掉 -fno-*）
 #---------------------------------------------------------------------------------
-ARCH	:=	-march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE
+ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
+CXXFLAGS	:= $(CFLAGS) -std=c++1z -O2 -Wno-volatile \
+			-DBOREALIS_RESOURCES="\"$(BOREALIS_RESOURCES)\""
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lnx
+LIBS	:= -lnx -lm
 
 #---------------------------------------------------------------------------------
-# 库目录列表（顶层含 include 和 lib）
+# 库目录列表（顶层含 include 和 lib）；switch-glfw/switch-mesa 装到 $(PORTLIBS)
 #---------------------------------------------------------------------------------
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
+
+#---------------------------------------------------------------------------------
+# 引入 borealis（追加其源码/头文件目录和 glfw/EGL 链接；必须在 LIBDIRS 之后）
+#---------------------------------------------------------------------------------
+include $(TOPDIR)/library/borealis/library/borealis.mk
 
 #---------------------------------------------------------------------------------
 # 以下为标准规则，除非要加新文件扩展名，否则无需修改
