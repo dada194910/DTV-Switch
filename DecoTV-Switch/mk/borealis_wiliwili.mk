@@ -33,8 +33,8 @@ SOURCES := $(SOURCES) \
 	$(current_dir)/lib/extern/libretro-common/encodings \
 	$(current_dir)/lib/extern/libretro-common/features \
 	$(current_dir)/lib/extern/nxfmtwrapper \
-	$(current_dir)/lib/extern/yoga/src/yoga/event \
-	$(current_dir)/lib/extern/yoga/src/yoga \
+	$(current_dir)/lib/extern/yoga/yoga/event \
+	$(current_dir)/lib/extern/yoga/yoga \
 	$(current_dir)/lib/extern/tinyxml2 \
 	$(current_dir)/lib/extern/libromfs/lib/source \
 	$(addprefix $(current_dir)/lib/extern/switch-libpulsar/, $(PLSR_SOURCES))
@@ -42,7 +42,7 @@ SOURCES := $(SOURCES) \
 INCLUDES := $(INCLUDES) \
 	$(current_dir)/include \
 	$(current_dir)/lib/extern/fmt/include \
-	$(current_dir)/lib/extern/yoga/src \
+	$(current_dir)/lib/extern/yoga \
 	$(current_dir)/lib/extern/tweeny/include \
 	$(current_dir)/lib/extern/libromfs/lib/include \
 	$(current_dir)/include/borealis/extern \
