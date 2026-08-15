@@ -90,30 +90,36 @@ static bool perform(CURL* curl, HttpResponse* out) {
     return res == CURLE_OK;
 }
 
-std::string httpGet(const std::string& url, bool withCookies, long* outStatus) {
+void httpGet(const std::string& url, bool withCookies, HttpResponse* out) {
     HttpResponse resp;
     std::string body;
     CURL* curl = makeHandle(&body);
-    if (!curl) return "";
+    if (!curl) {
+        if (out) *out = resp;
+        return;
+    }
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 
-    // 传输失败时重试一次（Switch 端偶发 DNS/连接失败，重试常可恢复）
-    bool ok = perform(curl, &resp);
-    if (!ok) {
-        sleep(1);
-        body.clear();  // 清掉第一次可能残留的部分响应
-        brls::Logger::info("decotv: GET {} failed (curl err={}), retrying...", url, resp.curlError);
+    // 传输失败自动重试 3 次（Switch 端偶发 DNS/连接失败，2s 间隔重试常可恢复）
+    bool ok = false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        body.clear();
         ok = perform(curl, &resp);
+        if (ok) break;
+        if (attempt < 2) {
+            brls::Logger::info("decotv: GET {} attempt {} failed (curl={}, http={}), retrying...",
+                               url, attempt + 1, resp.curlError, resp.status);
+            sleep(2);
+        }
     }
     curl_easy_cleanup(curl);
 
-    if (outStatus) *outStatus = resp.status;
+    resp.body = body;
+    if (out) *out = resp;
 
     brls::Logger::info("decotv: GET {} -> HTTP {} (curl={}, {} bytes): {}",
                        url, resp.status, resp.curlError, body.size(), body.substr(0, 120));
-    if (!ok) return "";
-    return body;
 }
 
 bool login(const std::string& username, const std::string& password, HttpResponse* out) {
@@ -159,13 +165,12 @@ bool login(const std::string& username, const std::string& password, HttpRespons
 std::vector<Category> fetchCategories(HttpResponse* out) {
     std::vector<Category> result;
     HttpResponse resp;
-    std::string body = httpGet(std::string(BASE_URL) + "/api/categories", true, &resp.status);
-    resp.body = body;
+    httpGet(std::string(BASE_URL) + "/api/categories", true, &resp);
     if (out) *out = resp;
-    if (body.empty()) return result;
+    if (resp.body.empty()) return result;
 
     try {
-        json j = json::parse(body);
+        json j = json::parse(resp.body);
         if (!j.contains("categories") || !j["categories"].is_array()) return result;
         for (auto& c : j["categories"]) {
             Category cat;
