@@ -15,7 +15,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	DecoTV
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source source/platform
 DATA		:=
 INCLUDES	:=	include
 # borealis 的 resources（字体/着色器/i18n）打进 romfs
@@ -49,7 +49,9 @@ CXXFLAGS	:= $(CFLAGS) -std=c++1z -O2 -Wno-volatile -include optional
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lnx
+# 网络层：libcurl（switch-curl，无外部 SSL）+ zlib
+# 链接顺序：curl 对象在前，其依赖的 libnx/zlib 在后（静态链接从后往前解析）
+LIBS	:= -lcurl -lnx -lz -lm
 
 #---------------------------------------------------------------------------------
 # 库目录列表（顶层含 include 和 lib）；switch-deko3d 装到 $(PORTLIBS)
