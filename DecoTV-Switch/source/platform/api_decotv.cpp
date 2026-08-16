@@ -56,8 +56,8 @@ static CURL* makeHandle(std::string* outBody) {
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToString);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, outBody);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);       // 30s 总超时
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);       // 15s 总超时（v1.24 收紧：原 30s 导致选源界面卡死）
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 6L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DecoTV-Switch/1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
@@ -127,16 +127,16 @@ void httpGet(const std::string& url, bool withCookies, HttpResponse* out) {
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 
-    // 传输失败自动重试 3 次（Switch 端偶发 DNS/连接失败，2s 间隔重试常可恢复）
+    // 传输失败自动重试 2 次（Switch 端偶发 DNS/连接失败，1s 间隔重试常可恢复；v1.24 由 3→2 收紧）
     bool ok = false;
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
         body.clear();
         ok = perform(curl, &resp);
         if (ok) break;
-        if (attempt < 2) {
+        if (attempt < 1) {
             brls::Logger::info("decotv: GET {} attempt {} failed (curl={}, http={}), retrying...",
                                url, attempt + 1, resp.curlError, resp.status);
-            sleep(2);
+            sleep(1);
         }
     }
     curl_easy_cleanup(curl);
