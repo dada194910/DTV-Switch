@@ -7,6 +7,7 @@
 #include <borealis/core/logger.hpp>
 
 #include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <ctime>
 #include <cctype>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <functional>
 
 #include "api_decotv.h"
 
@@ -172,6 +174,9 @@ bool initNetwork() {
 }
 
 void exitNetwork() {
+    // 退出时清理视频缓存：mpv 磁盘缓存片段留在 SD 卡会无限堆积（Switch 不自动清），
+    // 这里在进程结束前清掉 cache/mpv/*，避免占满卡（v2.01）。cache/img 海报保留（可复用）。
+    removeDirFiles(MPV_DIR);
     curl_global_cleanup();
     // 注意：不调 sslExit()（v1.28 教训：脏状态跨进程残留 -> 再启动 HTTPS 全废/系统崩溃）。
     // socketExit 由 borealis 的 userAppExit 负责。
@@ -274,9 +279,9 @@ std::vector<TvboxSite> loadConfig() {
 }
 
 // ---- 标准 tvbox 搜索：GET {api}?wd=关键词&ac=detail ----
-std::vector<TvboxHit> searchSite(const TvboxSite& src, const std::string& keyword,
-                                 HttpResponse* out) {
-    std::vector<TvboxHit> result;
+std::vector<VodItem> searchSite(const TvboxSite& src, const std::string& keyword,
+                               HttpResponse* out) {
+    std::vector<VodItem> result;
     std::string url = src.api;
     url += (url.find('?') == std::string::npos ? "?" : "&");
     url += "wd=" + urlEncode(keyword) + "&ac=detail";
@@ -290,24 +295,25 @@ std::vector<TvboxHit> searchSite(const TvboxSite& src, const std::string& keywor
         json j = json::parse(resp.body);
         if (!j.contains("list") || !j["list"].is_array()) return result;
         for (auto& it : j["list"]) {
-            TvboxHit hit;
-            hit.sourceKey  = src.key;
-            hit.sourceName = src.name;
-            hit.vodId      = std::to_string(it.value("vod_id", 0));
-            hit.vodName    = it.value("vod_name", "");
-            std::string pu = it.value("vod_play_url", "");
-            hit.playUrl = parsePlayUrl(pu);
-            if (!hit.vodName.empty() && !hit.playUrl.empty())
-                result.push_back(std::move(hit));
+            VodItem item;
+            item.sourceKey  = src.key;
+            item.sourceName = src.name;
+            item.vodId      = std::to_string(it.value("vod_id", 0));
+            item.vodName    = it.value("vod_name", "");
+            item.pic        = it.value("vod_pic", "");
+            std::string pu  = it.value("vod_play_url", "");
+            item.playUrl    = parsePlayUrl(pu);
+            if (!item.vodName.empty() && !item.playUrl.empty())
+                result.push_back(std::move(item));
         }
     } catch (...) {}
     return result;
 }
 
 // ---- 跨所有源搜索 ----
-std::vector<TvboxHit> searchAllSources(const std::vector<TvboxSite>& sites,
-                                       const std::string& keyword) {
-    std::vector<TvboxHit> result;
+std::vector<VodItem> searchAllSources(const std::vector<TvboxSite>& sites,
+                                      const std::string& keyword) {
+    std::vector<VodItem> result;
     int limit = (int)sites.size() < 8 ? (int)sites.size() : 8;
     for (int i = 0; i < limit; ++i) {
         if (!sites[i].searchable) continue;
@@ -315,6 +321,161 @@ std::vector<TvboxHit> searchAllSources(const std::vector<TvboxSite>& sites,
         for (auto& h : hits) result.push_back(std::move(h));
     }
     return result;
+}
+
+// ---- 详情：GET {api}?ac=detail&ids=<vodId> -> 解析分集 ----
+VodItem fetchDetail(const TvboxSite& src, const std::string& vodId) {
+    VodItem item;
+    item.sourceKey = src.key;
+    item.sourceName = src.name;
+    item.vodId = vodId;
+
+    std::string url = src.api;
+    url += (url.find('?') == std::string::npos ? "?" : "&");
+    url += "ac=detail&ids=" + urlEncode(vodId);
+
+    HttpResponse resp;
+    httpGet(url, false, &resp);
+    if (resp.body.empty()) return item;
+
+    try {
+        json j = json::parse(resp.body);
+        if (!j.contains("list") || !j["list"].is_array() || j["list"].empty())
+            return item;
+        auto& it = j["list"][0];
+        item.vodName = it.value("vod_name", "");
+        item.pic     = it.value("vod_pic", "");
+        std::string pu = it.value("vod_play_url", "");
+        item.playUrl  = parsePlayUrl(pu);
+        parseEpisodes(pu, item.episodeNames, item.episodeUrls);
+    } catch (...) {}
+    return item;
+}
+
+// ---- 把 vod_play_url 拆成 name/url 分集 ----
+void parseEpisodes(const std::string& raw, std::vector<std::string>& names,
+                   std::vector<std::string>& urls) {
+    names.clear();
+    urls.clear();
+    if (raw.empty()) return;
+    // 先按 $$$ 拆块（不同清晰度/直链块），每块取第一集即可避免重复
+    std::vector<std::string> blocks;
+    size_t pos = 0;
+    while (true) {
+        size_t d = raw.find("$$$", pos);
+        if (d == std::string::npos) { blocks.push_back(raw.substr(pos)); break; }
+        blocks.push_back(raw.substr(pos, d - pos));
+        pos = d + 3;
+    }
+    for (auto& blk : blocks) {
+        size_t h = blk.find('#');
+        std::string eps = (h != std::string::npos) ? blk.substr(0, h) : blk;
+        size_t p = 0;
+        while (true) {
+            size_t nxt = eps.find('#', p);
+            std::string ep = (nxt == std::string::npos) ? eps.substr(p)
+                                                       : eps.substr(p, nxt - p);
+            if (!ep.empty()) {
+                size_t d = ep.find('$');
+                std::string name = (d != std::string::npos) ? ep.substr(0, d) : ep;
+                std::string url  = (d != std::string::npos) ? ep.substr(d + 1) : ep;
+                if (!url.empty()) {
+                    names.push_back(name);
+                    urls.push_back(url);
+                }
+            }
+            if (nxt == std::string::npos) break;
+            p = nxt + 1;
+        }
+    }
+}
+
+// ---- 缓存管理 ----
+static const char* CACHE_DIR = "sdmc:/switch/DecoTV/cache";
+static const char* IMG_DIR   = "sdmc:/switch/DecoTV/cache/img";
+static const char* MPV_DIR   = "sdmc:/switch/DecoTV/cache/mpv";
+
+// djb2 哈希 -> 16 进制串，用作缓存文件名
+static std::string hashHex(const std::string& s) {
+    unsigned long hash = 5381;
+    for (unsigned char c : s) hash = ((hash << 5) + hash) + c;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%08lX", hash);
+    return std::string(buf);
+}
+
+static std::string extFromUrl(const std::string& url) {
+    size_t q = url.find('?');
+    std::string s = (q != std::string::npos) ? url.substr(0, q) : url;
+    size_t dot = s.find_last_of('.');
+    if (dot == std::string::npos) return ".jpg";
+    std::string e = s.substr(dot);  // 含点，如 .jpg
+    if (e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".webp" ||
+        e == ".gif" || e == ".bmp" || e == ".tga")
+        return e;
+    return ".jpg";
+}
+
+static bool fileExists(const std::string& path) {
+    struct stat st;
+    return stat(path.c_str(), &st) == 0 && st.st_size > 0;
+}
+
+// 把海报 URL 下载到 cache/img（已存在则复用），返回本地路径；失败返回空
+std::string cacheImage(const std::string& url) {
+    if (url.empty()) return "";
+    std::string path = std::string(IMG_DIR) + "/" + hashHex(url) + extFromUrl(url);
+    if (fileExists(path)) return path;
+
+    HttpResponse resp;
+    httpGet(url, false, &resp);
+    if (resp.body.empty()) return "";
+
+    mkdir(CACHE_DIR, 0777);
+    mkdir(IMG_DIR, 0777);
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return "";
+    fwrite(resp.body.data(), 1, resp.body.size(), f);
+    fclose(f);
+    return path;
+}
+
+// 删除目录下所有文件（不递归子目录，安全）
+static void removeDirFiles(const char* dir) {
+    DIR* d = opendir(dir);
+    if (!d) return;
+    struct dirent* e;
+    while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] == '.') continue;
+        std::string p = std::string(dir) + "/" + e->d_name;
+        unlink(p.c_str());
+    }
+    closedir(d);
+}
+
+static long dirSizeBytes(const char* dir) {
+    long total = 0;
+    DIR* d = opendir(dir);
+    if (!d) return 0;
+    struct dirent* e;
+    struct stat st;
+    while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] == '.') continue;
+        std::string p = std::string(dir) + "/" + e->d_name;
+        if (stat(p.c_str(), &st) == 0) total += st.st_size;
+    }
+    closedir(d);
+    return total;
+}
+
+bool clearCache() {
+    removeDirFiles(IMG_DIR);
+    removeDirFiles(MPV_DIR);
+    return true;
+}
+
+long cacheSizeBytes() {
+    return dirSizeBytes(IMG_DIR) + dirSizeBytes(MPV_DIR);
 }
 
 }  // namespace decotv
