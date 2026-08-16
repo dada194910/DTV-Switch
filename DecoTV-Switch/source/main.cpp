@@ -1,11 +1,12 @@
-// DecoTV Switch 客户端 —— 纯 TVBox 客户端（用户自管播放源）
-// 首页：用户源列表 + 「搜索全部」；源内：搜索此源。标准 tvbox 协议搜出后直接播放。
+// DecoTV Switch 客户端 —— 纯 TVBox 客户端（用户自管播放源）+ TVBox 风格界面
+// 布局：左侧 TabFrame 侧栏（搜索 / 各源 / 设置），右侧海报网格；详情页选集；设置可清缓存。
 #include <borealis.hpp>
 #include <switch.h>
 #include <switch/applets/swkbd.h>
 #include <functional>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "platform/api_decotv.h"
 #include "player/mpv_player.hpp"
@@ -25,6 +26,20 @@ static void setupChineseFont() {
     if (regular == brls::FONT_INVALID || cjk == brls::FONT_INVALID)
         return;
     nvgAddFallbackFontId(brls::Application::getNVGContext(), regular, cjk);
+}
+
+// ---- tvbox 软键盘输入（libnx Swkbd）----
+static std::string showKeyboard(const std::string& hint) {
+    SwkbdConfig kbd;
+    swkbdCreate(&kbd, 0);
+    swkbdConfigMakePresetDefault(&kbd);
+    swkbdConfigSetHeaderText(&kbd, hint.c_str());
+    swkbdConfigSetOkButtonText(&kbd, "搜索");
+    char buf[256] = {0};
+    Result rc = swkbdShow(&kbd, buf, sizeof(buf));
+    swkbdClose(&kbd);
+    std::string s(buf);
+    return (R_SUCCEEDED(rc) && !s.empty()) ? s : std::string();
 }
 
 // ---- 可聚焦行（主文本 + 副文本，A 键触发）----
@@ -49,18 +64,61 @@ static brls::Box* makeRow(const std::string& mainText, const std::string& subTex
     return row;
 }
 
-// ---- tvbox 软键盘输入（libnx Swkbd，最可靠）----
-static std::string showKeyboard(const std::string& hint) {
-    SwkbdConfig kbd;
-    swkbdCreate(&kbd, 0);
-    swkbdConfigMakePresetDefault(&kbd);          // 内部已设 SwkbdType_QWERTY
-    swkbdConfigSetHeaderText(&kbd, hint.c_str());
-    swkbdConfigSetOkButtonText(&kbd, "搜索");
-    char buf[256] = {0};
-    Result rc = swkbdShow(&kbd, buf, sizeof(buf));
-    swkbdClose(&kbd);
-    std::string s(buf);
-    return (R_SUCCEEDED(rc) && !s.empty()) ? s : std::string();
+static const decotv::TvboxSite* findSite(const std::string& key) {
+    for (auto& s : g_sites)
+        if (s.key == key) return &s;
+    return nullptr;
+}
+
+// ---- 海报卡片（TVBox 网格单元）----
+static brls::Box* makePosterCard(const decotv::VodItem& item,
+                                 std::function<void(const decotv::VodItem&)> onSelect) {
+    auto* card = new brls::Box(brls::Axis::COLUMN);
+    card->setFocusable(true);
+    card->setWidth(200);
+    card->setHeight(320);
+
+    auto* img = new brls::Image();
+    img->setScalingType(brls::ImageScalingType::FILL);
+    img->setImageAlign(brls::ImageAlignment::CENTER);
+    img->setWidth(200);
+    img->setHeight(260);
+    std::string p = decotv::cacheImage(item.pic);
+    if (!p.empty()) img->setImageFromFile(p);
+    card->addView(img);
+
+    auto* title = new brls::Label();
+    title->setText(item.vodName);
+    title->setFontSize(18);
+    title->setWidth(200);
+    title->setHeight(60);
+    title->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    card->addView(title);
+
+    card->registerClickAction([item, onSelect](brls::View*) {
+        if (onSelect) onSelect(item);
+        return true;
+    });
+    return card;
+}
+
+// ---- 海报网格（每行 COLS 张）----
+static brls::Box* buildPosterGrid(const std::vector<decotv::VodItem>& items,
+                                  std::function<void(const decotv::VodItem&)> onSelect) {
+    auto* grid = new brls::Box(brls::Axis::COLUMN);
+    grid->setPadding(20, 20, 20, 20);
+    grid->setSpacing(20);
+    const int COLS = 5;
+    size_t n = std::min(items.size(), (size_t)30);  // 限制数量，避免卡顿
+    for (size_t i = 0; i < n; i += COLS) {
+        auto* row = new brls::Box(brls::Axis::ROW);
+        row->setSpacing(20);
+        row->setJustifyContent(brls::JustifyContent::FLEX_START);
+        for (int c = 0; c < COLS && i + c < n; ++c)
+            row->addView(makePosterCard(items[i + c], onSelect));
+        grid->addView(row);
+    }
+    return grid;
 }
 
 // ---- 视频画面视图（libmpv 软渲染帧 → nanovg 纹理）----
@@ -168,112 +226,287 @@ class PlayerActivity : public brls::Activity {
     brls::Label* m_info = nullptr;
 };
 
-// ---- 搜索页（swkbd 输入关键词 → 搜全部/单源 → 结果 → A 播）----
-class SearchActivity : public brls::Activity {
+// ---- 详情/选集页 ----
+class DetailActivity : public brls::Activity {
   public:
-    explicit SearchActivity(std::vector<decotv::TvboxSite> sites) : m_sites(std::move(sites)) {}
+    DetailActivity(decotv::VodItem item, decotv::TvboxSite site)
+        : m_item(std::move(item)), m_site(std::move(site)) {}
+    ~DetailActivity() override {}
 
     brls::View* createContentView() override {
-        m_info = new brls::Label();
-        m_info->setFontSize(20);
-        m_info->setFocusable(true);
+        decotv::trailLog("DETAIL fetch vodId=" + m_item.vodId);
+        // 搜索结果已带 playUrl；详情页再拉一次拿完整分集
+        m_item = decotv::fetchDetail(m_site, m_item.vodId);
 
-        m_listBox = new brls::Box(brls::Axis::COLUMN);
+        auto* root = new brls::Box(brls::Axis::COLUMN);
+        root->setPadding(20, 20, 20, 20);
 
-        auto* layout = new brls::Box(brls::Axis::COLUMN);
-        layout->addView(m_info);
-        layout->addView(m_listBox);
+        // 顶部：海报 + 标题
+        auto* top = new brls::Box(brls::Axis::ROW);
+        auto* img = new brls::Image();
+        img->setScalingType(brls::ImageScalingType::FILL);
+        img->setImageAlign(brls::ImageAlignment::CENTER);
+        img->setWidth(180);
+        img->setHeight(250);
+        std::string p = decotv::cacheImage(m_item.pic);
+        if (!p.empty()) img->setImageFromFile(p);
+        top->addView(img);
 
-        auto* frame = new brls::AppletFrame(layout);
-        frame->setTitle(m_sites.size() == 1 ? ("DecoTV - " + m_sites[0].name)
-                                            : "DecoTV - 搜索全部");
+        auto* info = new brls::Box(brls::Axis::COLUMN);
+        auto* name = new brls::Label();
+        name->setText(m_item.vodName);
+        name->setFontSize(28);
+        info->addView(name);
+        auto* cnt = new brls::Label();
+        cnt->setText("共 " + std::to_string(m_item.episodeNames.size()) + " 集");
+        cnt->setFontSize(20);
+        info->addView(cnt);
+        top->addView(info);
+        root->addView(top);
+
+        // 选集网格
+        auto* scroll = new brls::ScrollingFrame();
+        auto* grid = new brls::Box(brls::Axis::COLUMN);
+        grid->setSpacing(12);
+        const int COLS = 6;
+        if (m_item.episodeNames.empty()) {
+            auto* none = new brls::Label();
+            none->setText("无分集信息");
+            none->setFontSize(22);
+            grid->addView(none);
+        } else {
+            for (size_t i = 0; i < m_item.episodeNames.size(); i += COLS) {
+                auto* row = new brls::Box(brls::Axis::ROW);
+                row->setSpacing(12);
+                row->setJustifyContent(brls::JustifyContent::FLEX_START);
+                for (int c = 0; c < COLS && i + c < (int)m_item.episodeNames.size(); ++c) {
+                    int idx = (int)(i + c);
+                    auto* ep = new brls::Box(brls::Axis::COLUMN);
+                    ep->setFocusable(true);
+                    ep->setWidth(150);
+                    ep->setHeight(60);
+                    auto* lbl = new brls::Label();
+                    lbl->setText(m_item.episodeNames[idx]);
+                    lbl->setFontSize(18);
+                    lbl->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+                    ep->addView(lbl);
+                    std::string url = m_item.episodeUrls[idx];
+                    ep->registerClickAction([url](brls::View*) {
+                        brls::Application::pushActivity(
+                            new PlayerActivity(decotv::parsePlayUrl(url)));
+                        return true;
+                    });
+                    row->addView(ep);
+                }
+                grid->addView(row);
+            }
+        }
+        scroll->setContentView(grid);
+        root->addView(scroll);
+
+        auto* frame = new brls::AppletFrame(root);
+        frame->setTitle(m_item.vodName);
         frame->registerAction("返回", brls::ControllerButton::BUTTON_B, [](brls::View*) {
             brls::Application::popActivity();
             return true;
         });
-
-        load();
         return frame;
     }
 
   private:
-    void load() {
-        brls::Application::giveFocus(m_info);
-        for (auto* r : m_rows) m_listBox->removeView(r);
-        m_rows.clear();
-
-        std::string kw = showKeyboard("输入片名关键词");
-        if (kw.empty()) {
-            m_info->setText("未输入关键词，按 B 返回");
-            return;
-        }
-
-        m_info->setText("搜索中: " + kw + " ...");
-        decotv::trailLog("SEARCH kw=" + kw + " sites=" + std::to_string(m_sites.size()));
-
-        auto hits = decotv::searchAllSources(m_sites, kw);
-        if (hits.empty()) {
-            auto* lbl = new brls::Label();
-            lbl->setText("未找到可用播放源（或网络失败）");
-            lbl->setFontSize(22);
-            m_listBox->addView(lbl);
-            m_rows.push_back(lbl);
-            brls::Application::giveFocus(m_info);
-        } else {
-            for (auto& h : hits) {
-                std::string sub = h.playUrl;
-                if (sub.size() > 48) sub = sub.substr(0, 48) + "...";
-                auto* row = makeRow(h.sourceName + "  " + h.vodName, sub, [h](brls::View*) {
-                    brls::Application::pushActivity(new PlayerActivity(h.playUrl));
-                    return true;
-                });
-                m_listBox->addView(row);
-                m_rows.push_back(row);
-            }
-            m_info->setText("找到 " + std::to_string(m_rows.size()) +
-                           " 个结果  A 播放  B 返回");
-            brls::Application::giveFocus(m_rows[0]);
-        }
-    }
-
-    std::vector<decotv::TvboxSite> m_sites;
-    brls::Label* m_info = nullptr;
-    brls::Box* m_listBox = nullptr;
-    std::vector<brls::View*> m_rows;
+    decotv::VodItem m_item;
+    decotv::TvboxSite m_site;
 };
 
-// ---- 首页：用户源列表 + 搜索全部 ----
+// ---- 搜索结果 -> 详情页（TVBox 习惯：先看选集）----
+static void onItemSelect(const decotv::VodItem& item) {
+    const decotv::TvboxSite* s = findSite(item.sourceKey);
+    if (!s) return;
+    brls::Application::pushActivity(new DetailActivity(item, *s));
+}
+
+// ---- 搜索全部源 标签内容 ----
+static brls::View* buildSearchTab() {
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+
+    auto* header = new brls::Header();
+    header->setTitle("搜索全部源");
+    root->addView(header);
+
+    auto* content = new brls::Box(brls::Axis::COLUMN);  // 结果容器（搜索后替换）
+    auto* hint = new brls::Label();
+    hint->setText("按下方按钮跨所有源搜索");
+    hint->setFontSize(22);
+    content->addView(hint);
+
+    auto* scroll = new brls::ScrollingFrame();
+    scroll->setContentView(content);
+    root->addView(scroll);
+
+    auto* btn = new brls::Button();
+    btn->setText("🔍 搜索");
+    btn->setFontSize(24);
+    btn->registerClickAction([content, scroll](brls::View*) {
+        std::string kw = showKeyboard("输入片名关键词");
+        if (kw.empty()) return true;
+        auto hits = decotv::searchAllSources(g_sites, kw);
+        if (hits.empty()) {
+            auto* box = new brls::Box(brls::Axis::COLUMN);
+            auto* lbl = new brls::Label();
+            lbl->setText("未找到 / 网络失败");
+            lbl->setFontSize(22);
+            box->addView(lbl);
+            scroll->setContentView(box);
+        } else {
+            scroll->setContentView(buildPosterGrid(hits, onItemSelect));
+        }
+        return true;
+    });
+    root->addView(btn);
+
+    return root;
+}
+
+// ---- 设置标签内容 ----
+static brls::View* buildSettingsTab() {
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setPadding(20, 20, 20, 20);
+
+    auto* header = new brls::Header();
+    header->setTitle("设置");
+    root->addView(header);
+
+    // 源管理：添加订阅
+    root->addView(makeRow("源管理（添加订阅）", "A 输入 tvbox 订阅地址，自动合并源", [](brls::View*) {
+        std::string url = showKeyboard("输入 tvbox 订阅地址(https://...)");
+        if (url.empty()) return true;
+        // 读取 config.json -> 追加 subscriptions -> 写回 -> 重载
+        const char* path = "sdmc:/switch/DecoTV/config.json";
+        std::string content;
+        FILE* f = fopen(path, "r");
+        if (f) {
+            char buf[1024];
+            while (fgets(buf, sizeof(buf), f)) content += buf;
+            fclose(f);
+        }
+        nlohmann::json j = content.empty() ? nlohmann::json::object()
+                                           : nlohmann::json::parse(content, nullptr, false);
+        if (!j.contains("subscriptions") || !j["subscriptions"].is_array())
+            j["subscriptions"] = nlohmann::json::array();
+        j["subscriptions"].push_back(url);
+        FILE* w = fopen(path, "w");
+        if (w) {
+            std::string out = j.dump(2);
+            fwrite(out.data(), 1, out.size(), w);
+            fclose(w);
+        }
+        g_sites = decotv::loadConfig();
+        auto* dlg = new brls::Dialog("已添加订阅，共 " + std::to_string(g_sites.size()) + " 个源。\n重启应用生效。");
+        dlg->addButton("确定", [] {});
+        dlg->open();
+        return true;
+    }));
+
+    // 清除缓存
+    std::string cacheStr = std::to_string(decotv::cacheSizeBytes() / 1024 / 1024) + " MB";
+    root->addView(makeRow("清除缓存", "当前缓存 " + cacheStr + "（海报 + 视频），A 清理", [](brls::View*) {
+        auto* dlg = new brls::Dialog("确认清除所有缓存？\n（海报与视频缓存将被删除）");
+        dlg->addButton("清除", [] {
+            decotv::clearCache();
+        });
+        dlg->addButton("取消", [] {});
+        dlg->open();
+        return true;
+    }));
+
+    // 关于
+    root->addView(makeRow("关于", "DecoTV v2.01 · 纯 TVBox 客户端 · 用户自管源", [](brls::View*) {
+        return true;
+    }));
+
+    return root;
+}
+
+// ---- 首页：TabFrame（TVBox 风格）----
 class HomeActivity : public brls::Activity {
   public:
     brls::View* createContentView() override {
-        auto* box = new brls::Box(brls::Axis::COLUMN);
+        auto* tab = new brls::TabFrame();
 
         if (!g_startupError.empty()) {
-            auto* lbl = new brls::Label();
-            lbl->setText("启动失败: " + g_startupError);
-            lbl->setFontSize(22);
-            box->addView(lbl);
-        } else if (g_sites.empty()) {
-            auto* lbl = new brls::Label();
-            lbl->setText("未配置播放源。\n请在 SD 卡 sdmc:/switch/DecoTV/config.json 添加 sites。");
-            lbl->setFontSize(20);
-            box->addView(lbl);
-        } else {
-            box->addView(makeRow("🔍 搜索全部源", "A 输入关键词跨源搜索", [this](brls::View*) {
-                brls::Application::pushActivity(new SearchActivity(g_sites));
-                return true;
-            }));
-            for (auto& s : g_sites) {
-                box->addView(makeRow(s.name, "A 搜索此源", [s](brls::View*) {
-                    brls::Application::pushActivity(new SearchActivity({s}));
-                    return true;
-                }));
-            }
+            tab->addTab("错误", [this]() -> brls::View* {
+                auto* b = new brls::Box(brls::Axis::COLUMN);
+                auto* l = new brls::Label();
+                l->setText("启动失败: " + g_startupError);
+                l->setFontSize(22);
+                b->addView(l);
+                return b;
+            });
+            return tab;
+        }
+        if (g_sites.empty()) {
+            tab->addTab("未配置源", []() -> brls::View* {
+                auto* b = new brls::Box(brls::Axis::COLUMN);
+                auto* l = new brls::Label();
+                l->setText("未配置播放源。\n请在 SD 卡 sdmc:/switch/DecoTV/config.json 添加 sites。");
+                l->setFontSize(20);
+                b->addView(l);
+                return b;
+            });
+            return tab;
         }
 
-        auto* frame = new brls::AppletFrame(box);
-        frame->setTitle("DecoTV");
-        return frame;
+        // 搜索全部
+        tab->addTab("🔍 搜索", []() -> brls::View* {
+            return buildSearchTab();
+        });
+
+        // 每个源一个标签
+        for (auto& s : g_sites) {
+            tab->addTab(s.name, [s]() -> brls::View* {
+                // 单源搜索：复用搜索结果页，但只搜这一源
+                auto* root = new brls::Box(brls::Axis::COLUMN);
+                auto* header = new brls::Header();
+                header->setTitle(s.name);
+                root->addView(header);
+                auto* content = new brls::Box(brls::Axis::COLUMN);
+                auto* hint = new brls::Label();
+                hint->setText("按下方按钮搜索此源");
+                hint->setFontSize(22);
+                content->addView(hint);
+                auto* scroll = new brls::ScrollingFrame();
+                scroll->setContentView(content);
+                root->addView(scroll);
+                auto* btn = new brls::Button();
+                btn->setText("🔍 搜索 " + s.name);
+                btn->setFontSize(24);
+                btn->registerClickAction([s, content, scroll](brls::View*) {
+                    std::string kw = showKeyboard("输入片名关键词");
+                    if (kw.empty()) return true;
+                    auto hits = decotv::searchSite(s, kw);
+                    if (hits.empty()) {
+                        auto* box = new brls::Box(brls::Axis::COLUMN);
+                        auto* lbl = new brls::Label();
+                        lbl->setText("未找到 / 网络失败");
+                        lbl->setFontSize(22);
+                        box->addView(lbl);
+                        scroll->setContentView(box);
+                    } else {
+                        scroll->setContentView(buildPosterGrid(hits, onItemSelect));
+                    }
+                    return true;
+                });
+                root->addView(btn);
+                return root;
+            });
+        }
+
+        // 设置
+        tab->addTab("⚙ 设置", []() -> brls::View* {
+            return buildSettingsTab();
+        });
+
+        return tab;
     }
 };
 
@@ -290,7 +523,7 @@ int main(int argc, char* argv[]) {
 
     // 退出说明：borealis(xfangfang fork) 已在构造时 appletHook，
     // 收到 OnExitRequest 调 quit() -> clear()(删所有 Activity, ~PlayerActivity 释放 mpv)
-    // -> exitNetwork() -> userAppExit()。无需自己注册钩子。
+    // -> exitNetwork()(清视频缓存) -> userAppExit()。无需自己注册钩子。
     setupChineseFont();
 
     decotv::trailLog("START initNetwork");
