@@ -60,6 +60,10 @@ std::vector<VodItem> searchAllSources(const std::vector<TvboxSite>& sites,
 // 点击时由界面拿片名去用户已配置源里搜）。失败返回空（界面显示降级提示）。
 std::vector<VodItem> fetchDoubanRecommend();
 
+// 源兜底：豆瓣不可达时，从用户已配置源拉 ac=videolist 热门列表当首页海报墙
+// （tvbox 首页本质是源自身内容，比依赖豆瓣更稳、更贴合 TVBox 习惯）。失败返回空。
+std::vector<VodItem> fetchSourceRecommend(const std::vector<TvboxSite>& sites);
+
 // 详情：GET {api}?ac=detail&ids=<vodId> -> 解析 vod_play_url 为分集
 VodItem fetchDetail(const TvboxSite& src, const std::string& vodId);
 
