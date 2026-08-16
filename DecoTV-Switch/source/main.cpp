@@ -422,7 +422,7 @@ static brls::View* buildSettingsTab() {
     }));
 
     // 关于
-    root->addView(makeRow("关于", "DecoTV v2.01 · 纯 TVBox 客户端 · 用户自管源", [](brls::View*) {
+    root->addView(makeRow("关于", "DecoTV v2.00 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
         return true;
     }));
 
@@ -441,17 +441,6 @@ class HomeActivity : public brls::Activity {
                 auto* l = new brls::Label();
                 l->setText("启动失败: " + g_startupError);
                 l->setFontSize(22);
-                b->addView(l);
-                return b;
-            });
-            return tab;
-        }
-        if (g_sites.empty()) {
-            tab->addTab("未配置源", []() -> brls::View* {
-                auto* b = new brls::Box(brls::Axis::COLUMN);
-                auto* l = new brls::Label();
-                l->setText("未配置播放源。\n请在 SD 卡 sdmc:/switch/DecoTV/config.json 添加 sites。");
-                l->setFontSize(20);
                 b->addView(l);
                 return b;
             });
@@ -534,7 +523,7 @@ int main(int argc, char* argv[]) {
     } else {
         decotv::trailLog("initNetwork ok");
         g_sites = decotv::loadConfig();
-        if (g_sites.empty()) g_startupError = "未配置播放源（请编辑 config.json）";
+        // 允许空源启动：未配置播放源不再拦截，进入主界面后用户可在「设置」里添加
     }
 
     brls::Application::pushActivity(new HomeActivity());
