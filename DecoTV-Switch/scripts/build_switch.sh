@@ -56,6 +56,7 @@ if [ -f "$PORTLIBS_PREFIX/include/mpv/client.h" ]; then
 else
     echo "  !! mpv headers MISSING"
 fi
+echo "  mpv libs: $(pkg-config --static --libs mpv 2>/dev/null || echo 'pkg-config FAILED')"
 
 echo "==> Building (classic devkitPro Makefile + borealis) ..."
 cd /data/DecoTV-Switch
