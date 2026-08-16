@@ -4,11 +4,8 @@
 // [+] 退出：setGlobalQuit(true)；B 返回上一页
 #include <borealis.hpp>
 #include <switch.h>
-#include <atomic>
 #include <functional>
-#include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "platform/api_decotv.h"
@@ -208,7 +205,6 @@ class PlayerActivity : public brls::Activity {
 class DetailActivity : public brls::Activity {
   public:
     explicit DetailActivity(decotv::VideoItem v) : m_video(std::move(v)) {}
-    ~DetailActivity() override { *m_alive = false; }  // v1.23：置标志 false；原子由 shared_ptr 控制块保活，不碰已释放的 this
 
     brls::View* createContentView() override {
         m_info = new brls::Label();
@@ -238,70 +234,47 @@ class DetailActivity : public brls::Activity {
         brls::Application::giveFocus(m_info);
         for (auto* r : m_rows) m_listBox->removeView(r);
         m_rows.clear();
-        m_focusGiven = false;
         m_info->setText("正在搜索各播放源...");
 
-        // v1.22：改为后台线程拉源 + 搜索，避免阻塞 UI 线程导致进入界面卡顿/假死。
-        // 之前 load() 在 UI 线程同步串行请求（1 次拉源 + 最多 6 次源搜索，每次 30s 超时+重试），
-        // 最坏要等数分钟。现在后台跑，结果分批投递到 UI 线程渐进显示。
-        // m_alive 在析构时置 false，后台线程检测到即停手，防止访问已销毁的 View。
-        // v1.23 修复：存活标志用 shared_ptr 持有，使后台线程与排队的 brls::sync 回调
-        // 在 Activity 被销毁后仍能安全判活（不再访问已释放的 this → 杜绝 use-after-free 死机）。
-        auto alive = m_alive;
-        std::string title = m_video.title;
-        std::thread([this, alive, title]() {
-            auto sources = decotv::fetchTvboxSources();
-            int limit = (int)sources.size() < 6 ? (int)sources.size() : 6;
+        // v1.24：恢复「同步加载」。v1.22/1.23 的后台线程 + brls::sync 在本 fork 必崩 2168-0001
+        // （performSyncTasks 在帧前于主线程执行回调，里面 addView/giveFocus 改视图树不安全）。
+        // 这里回到主线程正常调用栈里顺序请求——与 VideoListActivity::loadPage 同路径，已验证不崩。
+        // 网络层已收紧超时/重试，典型几秒出结果，不再卡死崩溃。
+        auto sources = decotv::fetchTvboxSources();
+        int limit = (int)sources.size() < 5 ? (int)sources.size() : 5;
 
-            for (int i = 0; i < limit; ++i) {
-                if (!*alive) return;                       // 用户已返回，放弃后续请求
-                auto hits = decotv::searchTvboxSource(sources[i], title);
-                if (hits.empty()) continue;
-                // 把本批结果投递到 UI 线程加行（渐进显示，界面不卡）
-                brls::sync([this, alive, hits]() {
-                    if (!*alive) return;                   // Activity 已销毁，安全放弃
-                    bool firstBatch = !m_focusGiven;
-                    for (auto& h : hits) {
-                        std::string sub = h.playUrl;
-                        if (sub.size() > 48) sub = sub.substr(0, 48) + "...";
-                        auto* row = makeRow(h.sourceName + "  " + h.vodName, sub,
-                                            [h](brls::View*) {
-                                                brls::Application::pushActivity(
-                                                    new PlayerActivity(h.playUrl));
-                                                return true;
-                                            });
-                        m_listBox->addView(row);
-                        m_rows.push_back(row);
-                    }
-                    if (firstBatch && !m_rows.empty()) {
-                        brls::Application::giveFocus(m_rows[0]);
-                        m_focusGiven = true;
-                    }
+        for (int i = 0; i < limit; ++i) {
+            auto hits = decotv::searchTvboxSource(sources[i], m_video.title);
+            for (auto& h : hits) {
+                std::string sub = h.playUrl;
+                if (sub.size() > 48) sub = sub.substr(0, 48) + "...";
+                auto* row = makeRow(h.sourceName + "  " + h.vodName, sub, [h](brls::View*) {
+                    brls::Application::pushActivity(new PlayerActivity(h.playUrl));
+                    return true;
                 });
+                m_listBox->addView(row);
+                m_rows.push_back(row);
             }
+        }
 
-            brls::sync([this, alive]() {
-                if (!*alive) return;                       // Activity 已销毁，安全放弃
-                if (m_rows.empty()) {
-                    auto* lbl = new brls::Label();
-                    lbl->setText("未找到可用播放源（或网络失败）");
-                    lbl->setFontSize(22);
-                    m_listBox->addView(lbl);
-                    m_rows.push_back(lbl);
-                    brls::Application::giveFocus(m_info);
-                }
-                m_info->setText("找到 " + std::to_string(m_rows.size()) +
-                               " 个播放源  A 选中  B 返回");
-            });
-        }).detach();
+        if (m_rows.empty()) {
+            auto* lbl = new brls::Label();
+            lbl->setText("未找到可用播放源（或网络失败）");
+            lbl->setFontSize(22);
+            m_listBox->addView(lbl);
+            m_rows.push_back(lbl);
+            brls::Application::giveFocus(m_info);
+        } else {
+            m_info->setText("找到 " + std::to_string(m_rows.size()) +
+                           " 个播放源  A 选中  B 返回");
+            brls::Application::giveFocus(m_rows[0]);
+        }
     }
 
     decotv::VideoItem m_video;
     brls::Label* m_info = nullptr;
     brls::Box* m_listBox = nullptr;
     std::vector<brls::View*> m_rows;
-    std::shared_ptr<std::atomic<bool>> m_alive = std::make_shared<std::atomic<bool>>(true);   // v1.23：存活标志（shared_ptr 持有，线程/回调可安全判活）
-    bool m_focusGiven = false;          // v1.22：仅首次结果聚焦第一行
 };
 
 // ---- 影片列表页 ----
