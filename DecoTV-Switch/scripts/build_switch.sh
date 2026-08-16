@@ -41,32 +41,17 @@ echo "==> borealis 就绪检查:"
 ls library/borealis/library/lib/extern/switch-libpulsar/deps.mk && echo "  deps.mk OK"
 ls library/borealis/resources/font/ >/dev/null && echo "  resources OK"
 
-echo "==> Installing ffmpeg + libmpv (wiliwili prebuilt deko3d pkgs) ..."
-# P4b 播放依赖：wiliwili 同款预编译包（已验证可下载）。
-# libuam 是 switch-libmpv 的依赖，必须先装（libmpv 的音频/UI 库）
-MPV_BASE="https://github.com/xfangfang/wiliwili/releases/download/v0.1.0"
-for pkg in "libuam-f8c9eef01ffe06334d530393d636d69e2b52744b-1-any.pkg.tar.zst" \
-           "switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
-           "switch-libmpv_deko3d-0.36.0-2-any.pkg.tar.zst"; do
-    if [ ! -f "/tmp/$pkg" ]; then
-        curl -sL -m 180 -o "/tmp/$pkg" "$MPV_BASE/$pkg" || echo "  !! download $pkg failed"
-    fi
-    echo "  installing $pkg ..."
-    dkp-pacman -U --noconfirm "/tmp/$pkg" || echo "  !! install $pkg failed (see error above)"
-done
+echo "==> Installing ffmpeg + libmpv (devkitPro official pkgs) ..."
+# P4b 播放依赖：devkitPro 仓库自带 switch-ffmpeg(7.1-5) + switch-libmpv(0.39.0-2)，
+# 依赖（dav1d/placebo/libarchive 等）由 pacman 自动解析，无需 wiliwili 预编译包
+dkp-pacman -S --noconfirm --needed switch-ffmpeg switch-libmpv
 # 确认 mpv 头文件可用（诊断路径）
 echo "  PORTLIBS_PREFIX=$PORTLIBS_PREFIX"
-for cand in "$PORTLIBS_PREFIX/include/mpv/client.h" \
-            "/opt/devkitpro/portlibs/switch/include/mpv/client.h" \
-            "/opt/devkitpro/portlibs/switch/include/mpv/client.h"; do
-    if [ -f "$cand" ]; then echo "  mpv header found: $cand"; fi
-done
-ls "$PORTLIBS_PREFIX/include/" 2>/dev/null | head -20
-ls "$PORTLIBS_PREFIX/lib/" 2>/dev/null | grep -iE "mpv|avcodec|libuam" | head
 if [ -f "$PORTLIBS_PREFIX/include/mpv/client.h" ]; then
     echo "  mpv headers OK"
 else
-    echo "  !! mpv headers MISSING"
+    echo "  !! mpv headers MISSING (checked $PORTLIBS_PREFIX/include/mpv/client.h)"
+    ls "$PORTLIBS_PREFIX/include/" 2>/dev/null | head -10
 fi
 echo "  mpv libs: $(pkg-config --static --libs mpv 2>/dev/null || echo 'pkg-config FAILED')"
 
