@@ -39,11 +39,8 @@ bool Player::init() {
     mpv_set_option_string(m_mpv, "user-agent",
                           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0 Safari/537.36");
-    // 彻底禁用音频（v1.20）：Switch 上 libmpv 的音频输出后端(ao)初始化会失败，
-    // 报 code -13 (MPV_ERROR_AO_INIT_FAILED)。该错误不致命——只影响出声、不影响
-    // 视频解码，却会让整段播放以 END_FILE ERROR 中止、画面被"加载失败"盖住。
-    // 直接 audio=no 让 mpv 完全不碰音频设备，问题根除。声音后续单独修复。
-    mpv_set_option_string(m_mpv, "audio", "no");
+    // 注意：不在初始化时全局禁用音频。经验证本构建里 audio=no 不生效，且对能出声的源
+    // 反而可能误杀声音。音频初始化失败 (code -13) 改为「按源重试」处理，见 processEvents()（v1.21）。
 
     if (mpv_initialize(m_mpv) < 0) {
         brls::Logger::error("mpv: mpv_initialize failed");
@@ -71,6 +68,8 @@ bool Player::init() {
 
 void Player::open(const std::string& url) {
     if (!m_mpv || url.empty()) return;
+    m_lastUrl       = url;   // v1.21：记录用于 -13 自动重试
+    m_audioRetried = false;  // v1.21：新源重置重试标志
     // 防盗链：源站 m3u8 多数校验 Referer 域名，从 URL 提取源站域名设置（v1.18）
     size_t schemePos = url.find("://");
     if (schemePos != std::string::npos) {
@@ -190,6 +189,20 @@ void Player::processEvents() {
                 if (end->reason == MPV_END_FILE_REASON_ERROR) {
                     std::string err = mpv_error_string(end->error);
                     brls::Logger::error("mpv: end file ERROR (code {}) {}", end->error, err);
+                    // 音频输出初始化失败 (code -13 = MPV_ERROR_AO_INIT_FAILED)：与具体源的音频流有关，
+                    // 多数情况是采样率/格式不被 Switch audren 支持。自动用 Switch 兼容参数（48kHz/s16/stereo）
+                    // 重试该源一次（v1.21）。重试成功则保住画面与声音；重试仍失败才上报错误，避免误杀能播的源。
+                    if (end->error == MPV_ERROR_AO_INIT_FAILED && !m_audioRetried && !m_lastUrl.empty()) {
+                        m_audioRetried = true;
+                        mpv_set_property_string(m_mpv, "audio-samplerate", "48000");
+                        mpv_set_property_string(m_mpv, "audio-format", "s16");
+                        mpv_set_property_string(m_mpv, "audio-channels", "stereo");
+                        brls::Logger::info("mpv: AO init failed on this source; "
+                                           "retrying with Switch-compatible audio (48k/s16/stereo)...");
+                        const char* cmd[] = {"loadfile", m_lastUrl.c_str(), "replace", nullptr};
+                        mpv_command_async(m_mpv, 0, cmd);
+                        break;  // 不发错误弹窗，等重试结果
+                    }
                     if (m_cb) m_cb(Event::ERROR, 0,
                                    "加载失败: " + err + " (code " + std::to_string(end->error) + ")");
                 } else if (end->reason == MPV_END_FILE_REASON_EOF) {
