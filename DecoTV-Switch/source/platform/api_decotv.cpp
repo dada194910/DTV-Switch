@@ -57,6 +57,65 @@ static void decotvLog(const std::string& line) {
     }
 }
 
+// 判断一个地址是否像「可直接播放的媒体直链」（而非 /share/、/play/ 这类分享/页面地址）
+static bool looksLikeMedia(const std::string& u) {
+    std::string s = u;
+    size_t q = s.find('?');
+    if (q != std::string::npos) s = s.substr(0, q);   // 去掉查询参数再判扩展名
+    const char* exts[] = {".m3u8", ".m3u", ".mp4", ".ts", ".flv",
+                          ".mkv", ".webm", ".mov", ".aac", ".mp3"};
+    for (const char* e : exts) {
+        size_t n = strlen(e);
+        if (s.size() >= n && s.compare(s.size() - n, n, e) == 0)
+            return true;
+    }
+    if (s.find("/index.m3u8") != std::string::npos) return true;
+    return false;
+}
+
+// 把 TVBox 的 vod_play_url 解析出第一个可播放的媒体地址。
+// 形形色色，用 # 分隔剧集、$ 分隔「名称$地址」、$$$ 分隔不同清晰度/直链块与分享页块：
+//   正片$https://a.com/x.m3u8
+//   720P$https://a.com/share/XXX$$$720P$https://a.com/x.m3u8        (分享页在前，真链在后)
+//   HD$https://a.com/x.m3u8$$$HD$https://a.com/share/YYY            (真链在前，分享页在后)
+//   第1集$/play/A#第2集$/play/B#...$$$第1集$/play/A/index.m3u8#...   (普通块 / m3u8 块)
+//   第01集$/share/Z#第02集$/share/W#...                              (仅分享页，无直链，需解析层才能播)
+// 策略：先按 $$$ 拆块（块间按集索引对齐），取第一集在各块里的候选地址，
+//       优先挑真实媒体直链（.m3u8/.mp4/.ts/... 或含 /index.m3u8），挑不到退回首个候选。
+static std::string parsePlayUrl(const std::string& raw) {
+    if (raw.empty()) return "";
+
+    // 1) 按 $$$ 拆成多个「块」
+    std::vector<std::string> blocks;
+    size_t pos = 0;
+    while (true) {
+        size_t d = raw.find("$$$", pos);
+        if (d == std::string::npos) { blocks.push_back(raw.substr(pos)); break; }
+        blocks.push_back(raw.substr(pos, d - pos));
+        pos = d + 3;
+    }
+
+    // 2) 每个块取「第一集」地址；块间按集索引对齐，汇集第一集的多个候选直链
+    std::vector<std::string> candidates;
+    for (auto& blk : blocks) {
+        std::string ep = blk;
+        size_t h = blk.find('#');
+        if (h != std::string::npos) ep = blk.substr(0, h);   // 取第一集
+        size_t d = ep.find('$');
+        std::string url = (d != std::string::npos) ? ep.substr(d + 1) : ep;
+        if (!url.empty()) {
+            bool dup = false;
+            for (auto& x : candidates) if (x == url) { dup = true; break; }
+            if (!dup) candidates.push_back(url);
+        }
+    }
+    if (candidates.empty()) return "";
+
+    // 3) 优先真实媒体直链，其次退回首个候选
+    for (auto& c : candidates) if (looksLikeMedia(c)) return c;
+    return candidates[0];
+}
+
 // ---- 创建 curl easy handle ----
 // cookie 采用 libcurl 推荐模式：COOKIEFILE + COOKIEJAR 指向同一文件，
 // 每个请求都"读已有 cookie + 把新 Set-Cookie 写回"，保证登录态跨请求持久
@@ -307,15 +366,10 @@ std::vector<TvboxHit> searchTvboxSource(const TvboxSource& src, const std::strin
             hit.sourceName = src.name;
             hit.vodId      = std::to_string(it.value("vod_id", 0));
             hit.vodName    = it.value("vod_name", "");
-            // vod_play_url 形如 "正片$https://...m3u8#第2集$https://..."，取第一个地址
+            // vod_play_url 形如 "正片$https://...m3u8#第2集$..."，或含 $$$ 多清晰度/直链与分享页变体。
+            // 用 parsePlayUrl 正确处理（v1.27）：优先第一个真实媒体直链，避开 /share/、/play/ 页面地址。
             std::string pu = it.value("vod_play_url", "");
-            size_t first = pu.find('$');
-            if (first != std::string::npos) {
-                size_t end = pu.find('#', first);
-                hit.playUrl = pu.substr(first + 1,
-                                        end == std::string::npos ? std::string::npos
-                                                                 : end - first - 1);
-            }
+            hit.playUrl = parsePlayUrl(pu);
             if (!hit.vodName.empty() && !hit.playUrl.empty()) {
                 // v1.26：落盘诊断——记录原始 vod_play_url 与提取出的 playUrl，
                 // 用于定位 -13/-17（尤其 -17 多为 URL 不可直接播放，需解析/换头/解码）
