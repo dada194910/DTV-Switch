@@ -5,6 +5,7 @@
 #include <borealis/core/logger.hpp>
 #include <borealis/core/thread.hpp>  // brls::sync（跨线程投递到 UI 线程）
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
