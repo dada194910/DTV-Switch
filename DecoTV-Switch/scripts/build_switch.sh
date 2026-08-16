@@ -67,7 +67,9 @@ else
     echo "  !! mpv headers MISSING (checked $PORTLIBS/include/mpv/client.h)"
 fi
 echo "  mpv.pc: $(ls "$PORTLIBS/lib/pkgconfig/" 2>/dev/null | grep -i mpv || echo 'no mpv.pc')"
-echo "  mpv libs(dkp-pkg-config): $(dkp-pkg-config --static --libs mpv 2>/dev/null || echo 'FAILED')"
+echo "  pkg-config 诊断:"
+pkg-config --version
+PKG_CONFIG_PATH="$PORTLIBS/lib/pkgconfig" pkg-config --static --libs mpv 2>&1 | head -5 || true
 
 echo "==> Building (classic devkitPro Makefile + borealis) ..."
 cd /data/DecoTV-Switch
