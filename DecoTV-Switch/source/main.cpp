@@ -99,31 +99,32 @@ class PlayerView : public brls::View {
 
     void draw(NVGcontext* vg, float x, float y, float w, float h, brls::Style style,
               brls::FrameContext* ctx) override {
-        if (m_player && m_player->hasFrame()) {
-            int dw = (int)(w * brls::Application::windowScale);
-            int dh = (int)(h * brls::Application::windowScale);
-            m_player->resizeSurface(dw, dh);
-            if (m_player->renderFrame()) {
-                if (m_tex && (m_texW != dw || m_texH != dh)) {
-                    nvgDeleteImage(vg, m_tex);
-                    m_tex = 0;
-                }
-                if (!m_tex) {
-                    m_tex = nvgCreateImageRGBA(vg, dw, dh, 0,
-                                               (const unsigned char*)m_player->frameData());
-                    m_texW = dw;
-                    m_texH = dh;
-                } else {
-                    nvgUpdateImage(vg, m_tex, (const unsigned char*)m_player->frameData());
-                }
+        if (!m_player) return;
+        // 注意：不能先判 hasFrame()——缓冲由 resizeSurface 分配，初始为空，
+        // 必须先分配再渲染（v1.17：修复有声音无画面——首帧渲染驱动软解）
+        int dw = (int)(w * brls::Application::windowScale);
+        int dh = (int)(h * brls::Application::windowScale);
+        m_player->resizeSurface(dw, dh);
+        if (m_player->renderFrame()) {
+            if (m_tex && (m_texW != dw || m_texH != dh)) {
+                nvgDeleteImage(vg, m_tex);
+                m_tex = 0;
             }
-            if (m_tex) {
-                NVGpaint p = nvgImagePattern(vg, x, y, w, h, 0, m_tex, 1.0f);
-                nvgBeginPath(vg);
-                nvgRect(vg, x, y, w, h);
-                nvgFillPaint(vg, p);
-                nvgFill(vg);
+            if (!m_tex) {
+                m_tex = nvgCreateImageRGBA(vg, dw, dh, 0,
+                                           (const unsigned char*)m_player->frameData());
+                m_texW = dw;
+                m_texH = dh;
+            } else {
+                nvgUpdateImage(vg, m_tex, (const unsigned char*)m_player->frameData());
             }
+        }
+        if (m_tex) {
+            NVGpaint p = nvgImagePattern(vg, x, y, w, h, 0, m_tex, 1.0f);
+            nvgBeginPath(vg);
+            nvgRect(vg, x, y, w, h);
+            nvgFillPaint(vg, p);
+            nvgFill(vg);
         }
         // 注意：brls::View::draw 是纯虚函数，无基类实现可调，这里不调
     }
