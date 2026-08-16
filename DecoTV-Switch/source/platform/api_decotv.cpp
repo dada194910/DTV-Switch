@@ -163,7 +163,13 @@ bool initNetwork() {
 }
 
 void exitNetwork() {
+    // 清理本程序持久化的登录态缓存（Switch 不自动清）。
+    // 凭据写死在代码，下次启动自动重新登录，清空 cookie 无副作用，
+    // 避免脏/过期 cookie 影响下次启动（v1.28）。诊断日志(mpv.log/source.log)保留：体积小，崩后可定位。
+    unlink("sdmc:/switch/DecoTV/cookies.txt");
+
     curl_global_cleanup();
+    sslExit();   // 与 initNetwork() 的 sslInitialize(8) 配对，释放 SSL 服务会话（v1.28 修复遗漏）
     // socketExit 由 borealis 的 userAppExit 负责，这里不重复调用
 }
 
