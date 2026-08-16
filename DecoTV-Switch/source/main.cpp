@@ -422,7 +422,7 @@ static brls::View* buildSettingsTab() {
     }));
 
     // 关于
-    root->addView(makeRow("关于", "DecoTV v2.00 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
+    root->addView(makeRow("关于", "DecoTV v2.01 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
         return true;
     }));
 
