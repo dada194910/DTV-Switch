@@ -125,7 +125,7 @@ class PlayerView : public brls::View {
                 nvgFill(vg);
             }
         }
-        brls::View::draw(vg, x, y, w, h, style, ctx);
+        // 注意：brls::View::draw 是纯虚函数，无基类实现可调，这里不调
     }
 
     ~PlayerView() override {
