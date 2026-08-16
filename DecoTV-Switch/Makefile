@@ -52,9 +52,9 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 
 # 网络层：libcurl（switch-curl，SSL 后端 libnx）+ zlib
 # P4b 播放：libmpv（wiliwili deko3d 预编译包）静态依赖链很长，
-# 用 dkp-pkg-config --static --libs mpv 取完整链接参数（mpv.pc 的 Libs.private）
-# -lnx 必须放链尾：mpv/ffmpeg 及我们的代码都引用 libnx 符号（静态库顺序）
-LIBS	:= -lcurl $(shell dkp-pkg-config --static --libs mpv 2>/dev/null) -lz -lnx -lm
+# 显式 PKG_CONFIG_PATH + pkg-config --static 取 mpv.pc 完整链接参数；
+# -lnx 必须放链尾（mpv/ffmpeg 及我们的代码都引用 libnx 符号，静态库顺序）
+LIBS	:= -lcurl $(shell PKG_CONFIG_PATH=$(PORTLIBS)/lib/pkgconfig pkg-config --static --libs mpv 2>/dev/null) -lz -lnx -lm
 
 #---------------------------------------------------------------------------------
 # 库目录列表（顶层含 include 和 lib）；switch-deko3d 装到 $(PORTLIBS)
