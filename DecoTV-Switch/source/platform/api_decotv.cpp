@@ -151,8 +151,8 @@ static CURL* makeHandle(std::string* outBody) {
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToString);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, outBody);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 6L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 4L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DecoTV-Switch/2.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
@@ -212,17 +212,8 @@ void httpGet(const std::string& url, bool, HttpResponse* out) {
     }
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 
-    bool ok = false;
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        body.clear();
-        ok = perform(curl, &resp);
-        if (ok) break;
-        if (attempt < 1) {
-            brls::Logger::info("decotv: GET {} attempt {} failed (curl={}, http={}), retrying...",
-                               url, attempt + 1, resp.curlError, resp.status);
-            sleep(1);
-        }
-    }
+    body.clear();
+    perform(curl, &resp);   // v2.06: 单次请求，超时已收紧到 8s，消除点搜索卡死
     curl_easy_cleanup(curl);
 
     resp.body = body;
@@ -240,10 +231,18 @@ void httpGet(const std::string& url, bool, HttpResponse* out) {
 // }
 std::vector<TvboxSite> loadConfig() {
     std::vector<TvboxSite> result;
+    // 内置公共源兜底：即使 SD 卡无 config.json，开箱也有完整界面（v2.06 修复「侧栏只有推荐/搜索/设置」）
+    auto addBuiltinIfEmpty = [&]() {
+        if (!result.empty()) return;
+        result.push_back({"360zy", "360zy", "https://360zy.com/api.php/provide/vod", true});
+        result.push_back({"lelve", "乐视(isleve)", "https://api.lelve.cn/api.php/provide/vod", true});
+        trailLog("loadConfig: fallback to built-in sources (360zy/lelve)");
+    };
     const char* path = "sdmc:/switch/DecoTV/config.json";
     FILE* f = fopen(path, "r");
     if (!f) {
         trailLog("loadConfig: config.json NOT FOUND");
+        addBuiltinIfEmpty();
         return result;
     }
     std::string content;
@@ -283,6 +282,7 @@ std::vector<TvboxSite> loadConfig() {
         trailLog("loadConfig: parse failed");
     }
     trailLog("loadConfig: loaded " + std::to_string(result.size()) + " sites");
+    addBuiltinIfEmpty();
     return result;
 }
 
