@@ -47,6 +47,16 @@ static size_t writeToString(void* contents, size_t size, size_t nmemb, void* use
     return total;
 }
 
+// 把 tvbox 选源诊断信息落盘（v1.26），便于真机排错（brls 日志在 Switch 上不可见）
+static void decotvLog(const std::string& line) {
+    FILE* f = fopen("sdmc:/switch/DecoTV/source.log", "a");
+    if (f) {
+        fputs(line.c_str(), f);
+        fputc('\n', f);
+        fclose(f);
+    }
+}
+
 // ---- 创建 curl easy handle ----
 // cookie 采用 libcurl 推荐模式：COOKIEFILE + COOKIEJAR 指向同一文件，
 // 每个请求都"读已有 cookie + 把新 Set-Cookie 写回"，保证登录态跨请求持久
@@ -306,8 +316,17 @@ std::vector<TvboxHit> searchTvboxSource(const TvboxSource& src, const std::strin
                                         end == std::string::npos ? std::string::npos
                                                                  : end - first - 1);
             }
-            if (!hit.vodName.empty() && !hit.playUrl.empty())
+            if (!hit.vodName.empty() && !hit.playUrl.empty()) {
+                // v1.26：落盘诊断——记录原始 vod_play_url 与提取出的 playUrl，
+                // 用于定位 -13/-17（尤其 -17 多为 URL 不可直接播放，需解析/换头/解码）
+                std::string raw = pu;
+                if (raw.size() > 600) raw = raw.substr(0, 600) + "...";
+                decotvLog("SRC=" + src.name + " KEY=" + src.key + " vod=" + hit.vodName +
+                          " id=" + hit.vodId);
+                decotvLog("  vod_play_url(raw)=" + raw);
+                decotvLog("  -> playUrl=" + hit.playUrl);
                 result.push_back(std::move(hit));
+            }
         }
     } catch (...) {
         return result;
