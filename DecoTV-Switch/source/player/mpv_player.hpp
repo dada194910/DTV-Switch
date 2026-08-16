@@ -69,6 +69,7 @@ class Player {
     void* m_pixels = nullptr;
     int m_swW = 0, m_swH = 0, m_stride = 0;
     std::atomic<bool> m_needRender{false};  // mpv 渲染线程置位，UI 线程消费
+    bool m_everRendered = false;            // 首帧强制渲染（软渲染初始无 update 回调，必须主动渲染驱动解码）
 
     EventCallback m_cb;
     bool m_inited = false;
