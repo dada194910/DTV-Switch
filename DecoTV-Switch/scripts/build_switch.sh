@@ -40,6 +40,22 @@ echo "==> borealis 就绪检查:"
 ls library/borealis/library/lib/extern/switch-libpulsar/deps.mk && echo "  deps.mk OK"
 ls library/borealis/resources/font/ >/dev/null && echo "  resources OK"
 
+echo "==> Installing ffmpeg + libmpv (wiliwili prebuilt deko3d pkgs) ..."
+# P4b 播放依赖：wiliwili 同款预编译包（已验证可下载）
+MPV_BASE="https://github.com/xfangfang/wiliwili/releases/download/v0.1.0"
+for pkg in "switch-ffmpeg-7.1-1-any.pkg.tar.zst" "switch-libmpv_deko3d-0.36.0-2-any.pkg.tar.zst"; do
+    if [ ! -f "/tmp/$pkg" ]; then
+        curl -sL -m 180 -o "/tmp/$pkg" "$MPV_BASE/$pkg" || echo "  !! download $pkg failed"
+    fi
+    dkp-pacman -U --noconfirm "/tmp/$pkg" >/dev/null 2>&1 || echo "  !! install $pkg failed (maybe installed)"
+done
+# 确认 mpv 头文件可用
+if [ -f "$PORTLIBS_PREFIX/include/mpv/client.h" ]; then
+    echo "  mpv headers OK"
+else
+    echo "  !! mpv headers MISSING"
+fi
+
 echo "==> Building (classic devkitPro Makefile + borealis) ..."
 cd /data/DecoTV-Switch
 make -j"$(nproc)"
