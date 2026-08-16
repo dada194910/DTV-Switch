@@ -180,7 +180,7 @@ void Player::processEvents() {
                     brls::Logger::info("mpv: end file EOF");
                     if (m_cb) m_cb(Event::ENDED, 0, "");
                 } else {
-                    brls::Logger::info("mpv: end file reason={}", end->reason);
+                    brls::Logger::info("mpv: end file reason={}", (int)end->reason);
                     if (m_cb) m_cb(Event::ENDED, 0, "播放停止");
                 }
                 break;
