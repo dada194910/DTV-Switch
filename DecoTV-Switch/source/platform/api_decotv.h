@@ -56,6 +56,10 @@ std::vector<VodItem> searchSite(const TvboxSite& src, const std::string& keyword
 std::vector<VodItem> searchAllSources(const std::vector<TvboxSite>& sites,
                                       const std::string& keyword);
 
+// 豆瓣推荐（仿 TVBox 首页海报墙）：拉热门榜单，返回 VodItem（仅海报+片名，无直链，
+// 点击时由界面拿片名去用户已配置源里搜）。失败返回空（界面显示降级提示）。
+std::vector<VodItem> fetchDoubanRecommend();
+
 // 详情：GET {api}?ac=detail&ids=<vodId> -> 解析 vod_play_url 为分集
 VodItem fetchDetail(const TvboxSite& src, const std::string& vodId);
 
