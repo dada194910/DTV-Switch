@@ -39,10 +39,11 @@ bool Player::init() {
     mpv_set_option_string(m_mpv, "user-agent",
                           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0 Safari/537.36");
-    // 音频输出设备初始化失败时降级为静音而非中止播放（v1.19）。
-    // 部分源站/流会出现 code -13 (MPV_ERROR_AO_INIT_FAILED)，属音频设备问题，
-    // 与视频解码无关；降级后视频照常播放，避免"加载失败"盖住画面。
-    mpv_set_option_string(m_mpv, "audio-fallback-to-null", "yes");
+    // 彻底禁用音频（v1.20）：Switch 上 libmpv 的音频输出后端(ao)初始化会失败，
+    // 报 code -13 (MPV_ERROR_AO_INIT_FAILED)。该错误不致命——只影响出声、不影响
+    // 视频解码，却会让整段播放以 END_FILE ERROR 中止、画面被"加载失败"盖住。
+    // 直接 audio=no 让 mpv 完全不碰音频设备，问题根除。声音后续单独修复。
+    mpv_set_option_string(m_mpv, "audio", "no");
 
     if (mpv_initialize(m_mpv) < 0) {
         brls::Logger::error("mpv: mpv_initialize failed");
