@@ -42,9 +42,12 @@ ls library/borealis/library/lib/extern/switch-libpulsar/deps.mk && echo "  deps.
 ls library/borealis/resources/font/ >/dev/null && echo "  resources OK"
 
 echo "==> Installing ffmpeg + libmpv (wiliwili prebuilt deko3d pkgs) ..."
-# P4b 播放依赖：wiliwili 同款预编译包（已验证可下载）
+# P4b 播放依赖：wiliwili 同款预编译包（已验证可下载）。
+# libuam 是 switch-libmpv 的依赖，必须先装（libmpv 的音频/UI 库）
 MPV_BASE="https://github.com/xfangfang/wiliwili/releases/download/v0.1.0"
-for pkg in "switch-ffmpeg-7.1-1-any.pkg.tar.zst" "switch-libmpv_deko3d-0.36.0-2-any.pkg.tar.zst"; do
+for pkg in "libuam-f8c9eef01ffe06334d530393d636d69e2b52744b-1-any.pkg.tar.zst" \
+           "switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
+           "switch-libmpv_deko3d-0.36.0-2-any.pkg.tar.zst"; do
     if [ ! -f "/tmp/$pkg" ]; then
         curl -sL -m 180 -o "/tmp/$pkg" "$MPV_BASE/$pkg" || echo "  !! download $pkg failed"
     fi
