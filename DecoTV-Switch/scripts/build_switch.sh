@@ -24,8 +24,20 @@ command -v curl >/dev/null 2>&1 || pacman -S --noconfirm curl
 echo "==> Vendoring nlohmann/json.hpp (single header) ..."
 mkdir -p /data/DecoTV-Switch/include/nlohmann
 if [ ! -s /data/DecoTV-Switch/include/nlohmann/json.hpp ]; then
-    curl -sL "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp" \
-        -o /data/DecoTV-Switch/include/nlohmann/json.hpp
+    # 多镜像 + 重试：规避 CI 容器内 raw.githubusercontent.com 偶发 SSL 连接错误(exit 35)
+    JSON_OK=0
+    for url in \
+        "https://cdn.jsdelivr.net/gh/nlohmann/json@v3.11.3/single_include/nlohmann/json.hpp" \
+        "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp" ; do
+        if curl -sL --retry 5 --retry-all-errors --retry-delay 3 -m 120 \
+            -o /data/DecoTV-Switch/include/nlohmann/json.hpp "$url" \
+            && [ -s /data/DecoTV-Switch/include/nlohmann/json.hpp ]; then
+            JSON_OK=1
+            echo "  fetched from $url"
+            break
+        fi
+    done
+    [ "$JSON_OK" = "1" ] || { echo "  !! json.hpp download failed"; exit 1; }
 fi
 
 echo "==> Fetching borealis (xfangfang fork @5f08b286 tarball, deko3d backend) ..."
@@ -35,7 +47,7 @@ echo "==> Fetching borealis (xfangfang fork @5f08b286 tarball, deko3d backend) .
 cd /data/DecoTV-Switch
 if [ ! -d library/borealis/library ]; then
     mkdir -p library /tmp/xb
-    curl -sL -H "User-Agent: DecoTV-CI" -m 120 -o /tmp/xb.tar.gz \
+    curl -sL --retry 5 --retry-all-errors --retry-delay 3 -H "User-Agent: DecoTV-CI" -m 180 -o /tmp/xb.tar.gz \
         "https://api.github.com/repos/xfangfang/borealis/tarball/5f08b286f3df737f3321d2247a6fe633fcead03c"
     tar -xzf /tmp/xb.tar.gz -C /tmp/xb
     # GitHub tarball 根目录名格式：<owner>-<repo>-<sha前10>（如 xfangfang-borealis-5f08b28）
@@ -54,7 +66,7 @@ for pkg in "libuam-f8c9eef01ffe06334d530393d636d69e2b52744b-1-any.pkg.tar.zst" \
            "switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
            "switch-libmpv_deko3d-0.36.0-2-any.pkg.tar.zst"; do
     if [ ! -f "/tmp/$pkg" ]; then
-        curl -sL -m 180 -o "/tmp/$pkg" "$MPV_BASE/$pkg" || echo "  !! download $pkg failed"
+        curl -sL --retry 5 --retry-all-errors --retry-delay 3 -m 240 -o "/tmp/$pkg" "$MPV_BASE/$pkg" || echo "  !! download $pkg failed"
     fi
     echo "  installing $pkg ..."
     dkp-pacman -U --noconfirm "/tmp/$pkg" || echo "  !! install $pkg failed (see error above)"
