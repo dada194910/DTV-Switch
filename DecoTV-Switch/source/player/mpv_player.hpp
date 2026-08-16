@@ -75,7 +75,7 @@ class Player {
     bool m_inited = false;
 
     std::string m_lastUrl;        // 当前播放 URL（v1.21：用于 -13 自动重试）
-    bool m_audioRetried = false;  // 是否已对当前源做过音频兼容重试（防止死循环）
+    int m_audioRetryStage = 0;    // -13 音频重试阶段：0 未重试，1 已切 ao=null 重试，2 放弃（防止死循环）
 };
 
 }  // namespace mpv_player
