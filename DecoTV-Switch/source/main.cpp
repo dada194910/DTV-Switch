@@ -335,20 +335,26 @@ static brls::View* buildSearchTab() {
     header->setTitle("搜索全部源");
     root->addView(header);
 
-    auto* content = new brls::Box(brls::Axis::COLUMN);  // 结果容器（搜索后替换）
+    // 结果容器 + 滚动区
+    auto* content = new brls::Box(brls::Axis::COLUMN);
     auto* hint = new brls::Label();
-    hint->setText("按下方按钮跨所有源搜索");
+    hint->setText("使用下方「搜索」开始");
     hint->setFontSize(22);
     content->addView(hint);
-
     auto* scroll = new brls::ScrollingFrame();
     scroll->setContentView(content);
-    root->addView(scroll);
 
-    auto* btn = new brls::Button();
-    btn->setText("🔍 搜索");
-    btn->setFontSize(24);
-    btn->registerClickAction([content, scroll](brls::View*) {
+    // 功能区快捷入口（TVBox 风格）：历史 / 搜索 / 收藏
+    auto* bar = new brls::Box(brls::Axis::ROW);
+    bar->setMarginTop(12);
+    bar->setMarginBottom(12);
+    bar->setJustifyContent(brls::JustifyContent::FLEX_START);
+
+    auto* btnSearch = new brls::Button();
+    btnSearch->setText("🔍 搜索");
+    btnSearch->setFontSize(22);
+    btnSearch->setMarginRight(16);
+    btnSearch->registerClickAction([content, scroll](brls::View*) {
         std::string kw = showKeyboard("输入片名关键词");
         if (kw.empty()) return true;
         auto hits = decotv::searchAllSources(g_sites, kw);
@@ -364,8 +370,33 @@ static brls::View* buildSearchTab() {
         }
         return true;
     });
-    root->addView(btn);
+    bar->addView(btnSearch);
 
+    auto* btnHistory = new brls::Button();
+    btnHistory->setText("🕘 历史");
+    btnHistory->setFontSize(22);
+    btnHistory->setMarginRight(16);
+    btnHistory->registerClickAction([](brls::View*) {
+        auto* dlg = new brls::Dialog("历史功能开发中（后续版本）");
+        dlg->addButton("确定", [] {});
+        dlg->open();
+        return true;
+    });
+    bar->addView(btnHistory);
+
+    auto* btnFav = new brls::Button();
+    btnFav->setText("⭐ 收藏");
+    btnFav->setFontSize(22);
+    btnFav->registerClickAction([](brls::View*) {
+        auto* dlg = new brls::Dialog("收藏功能开发中（后续版本）");
+        dlg->addButton("确定", [] {});
+        dlg->open();
+        return true;
+    });
+    bar->addView(btnFav);
+
+    root->addView(bar);
+    root->addView(scroll);
     return root;
 }
 
@@ -422,7 +453,7 @@ static brls::View* buildSettingsTab() {
     }));
 
     // 关于
-    root->addView(makeRow("关于", "DecoTV v2.01 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
+    root->addView(makeRow("关于", "DecoTV v2.02 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
         return true;
     }));
 
