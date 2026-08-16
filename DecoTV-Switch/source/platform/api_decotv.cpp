@@ -48,8 +48,19 @@ static size_t writeToString(void* contents, size_t size, size_t nmemb, void* use
 }
 
 // 把 tvbox 选源诊断信息落盘（v1.26），便于真机排错（brls 日志在 Switch 上不可见）
+// v1.28：加体积上限。append 模式会无限增长（Switch 不会替我们清），
+// 超过 256KB 就改用 "w" 覆盖重来，保证日志既有用又不会吃满 SD 卡。
+static const long LOG_MAX_BYTES = 256 * 1024;
+
+static const char* logOpenMode(const char* path) {
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > LOG_MAX_BYTES) return "w";
+    return "a";
+}
+
 static void decotvLog(const std::string& line) {
-    FILE* f = fopen("sdmc:/switch/DecoTV/source.log", "a");
+    const char* path = "sdmc:/switch/DecoTV/source.log";
+    FILE* f = fopen(path, logOpenMode(path));
     if (f) {
         fputs(line.c_str(), f);
         fputc('\n', f);
