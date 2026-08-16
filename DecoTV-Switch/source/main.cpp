@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "platform/api_decotv.h"
+#include "player/mpv_player.hpp"
 
 static std::vector<decotv::Category> g_categories;
 static std::string g_startupError;
@@ -91,6 +92,113 @@ static void categoryToDouban(const decotv::Category& cat, int primaryIndex,
     }
 }
 
+// ---- 视频画面视图（P4b：libmpv 软渲染帧 → nanovg 纹理绘制）----
+class PlayerView : public brls::View {
+  public:
+    void setPlayer(mpv_player::Player* p) { m_player = p; }
+
+    void draw(NVGcontext* vg, float x, float y, float w, float h, brls::Style style,
+              brls::FrameContext* ctx) override {
+        if (m_player && m_player->hasFrame()) {
+            int dw = (int)(w * brls::Application::windowScale);
+            int dh = (int)(h * brls::Application::windowScale);
+            m_player->resizeSurface(dw, dh);
+            if (m_player->renderFrame()) {
+                if (m_tex && (m_texW != dw || m_texH != dh)) {
+                    nvgDeleteImage(vg, m_tex);
+                    m_tex = 0;
+                }
+                if (!m_tex) {
+                    m_tex = nvgCreateImageRGBA(vg, dw, dh, 0,
+                                               (const unsigned char*)m_player->frameData());
+                    m_texW = dw;
+                    m_texH = dh;
+                } else {
+                    nvgUpdateImage(vg, m_tex, (const unsigned char*)m_player->frameData());
+                }
+            }
+            if (m_tex) {
+                NVGpaint p = nvgImagePattern(vg, x, y, w, h, 0, m_tex, 1.0f);
+                nvgBeginPath(vg);
+                nvgRect(vg, x, y, w, h);
+                nvgFillPaint(vg, p);
+                nvgFill(vg);
+            }
+        }
+        brls::View::draw(vg, x, y, w, h, style, ctx);
+    }
+
+    ~PlayerView() override {
+        if (m_tex) nvgDeleteImage(brls::Application::getNVGContext(), m_tex);
+    }
+
+  private:
+    mpv_player::Player* m_player = nullptr;
+    int m_tex   = 0;
+    int m_texW  = 0;
+    int m_texH  = 0;
+};
+
+// ---- 播放器页（P4b：libmpv 播放 m3u8/mp4，A 暂停/播放，B 退出）----
+class PlayerActivity : public brls::Activity {
+  public:
+    explicit PlayerActivity(std::string url) : m_url(std::move(url)) {}
+
+    ~PlayerActivity() override { m_player.destroy(); }
+
+    brls::View* createContentView() override {
+        m_player.setEventCallback([this](mpv_player::Event ev, double, const std::string& msg) {
+            switch (ev) {
+                case mpv_player::Event::LOADED:
+                    if (m_info) m_info->setText("播放中  A 暂停/播放  B 返回");
+                    break;
+                case mpv_player::Event::ENDED:
+                    if (m_info) m_info->setText("播放结束  B 返回");
+                    break;
+                case mpv_player::Event::ERROR:
+                    if (m_info) m_info->setText("错误: " + msg);
+                    break;
+            }
+        });
+
+        m_view = new PlayerView();
+        m_view->setPlayer(&m_player);
+        m_view->setHeightPercentage(78);
+
+        m_info = new brls::Label();
+        m_info->setFontSize(20);
+        m_info->setFocusable(true);  // 保活焦点锚点
+        m_info->setText("加载中...");
+
+        auto* layout = new brls::Box(brls::Axis::COLUMN);
+        layout->addView(m_view);
+        layout->addView(m_info);
+
+        auto* frame = new brls::AppletFrame(layout);
+        frame->setTitle("播放");
+        frame->registerAction("返回", brls::ControllerButton::BUTTON_B, [this](brls::View*) {
+            m_player.stop();
+            m_player.destroy();
+            brls::Application::popActivity();
+            return true;
+        });
+        frame->registerAction("暂停/播放", brls::ControllerButton::BUTTON_A, [this](brls::View*) {
+            m_player.togglePause();
+            return true;
+        });
+
+        m_player.init();
+        m_player.open(m_url);
+        return frame;
+    }
+
+  private:
+    std::string m_url;
+    mpv_player::Player m_player;
+    PlayerView* m_view = nullptr;
+    brls::Label* m_info = nullptr;
+};
+
 // ---- 详情页（P4a：直调 TVBox 源搜索，显示各源播放地址；播放 P4b 实现）----
 // 定义在 VideoListActivity 之前（后者行点击要 new 本类）
 class DetailActivity : public brls::Activity {
@@ -139,7 +247,7 @@ class DetailActivity : public brls::Activity {
                 std::string sub = h.playUrl;
                 if (sub.size() > 48) sub = sub.substr(0, 48) + "...";
                 auto* row = makeRow(h.sourceName + "  " + h.vodName, sub, [h](brls::View*) {
-                    brls::Application::notify("播放将在 P4b 实现: " + h.playUrl);
+                    brls::Application::pushActivity(new PlayerActivity(h.playUrl));
                     return true;
                 });
                 m_listBox->addView(row);
