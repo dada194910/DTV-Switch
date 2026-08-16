@@ -43,6 +43,12 @@ bool Player::init() {
     mpv_set_option_string(m_mpv, "vd-lavc-dr", "no");
     mpv_set_option_string(m_mpv, "vd-lavc-threads", "4");  // 4 线程解码（Switch 4 核）
     mpv_set_option_string(m_mpv, "audio-channels", "stereo");
+    // Switch audren 只接受有限的音频格式/采样率。部分 tvbox 源的音频流（非常规 48k/s16/stereo）
+    // 会让 audren 初始化失败 (code -13)。这里在初始化阶段（早于 mpv_initialize）就把输出格式
+    // 统一约束为 audren 友好值，使所有源都以兼容格式送交 ao，从源头消除 -13（v1.25）。
+    // （参考 wiliwili：它只设 audio-channels=stereo 即可，因为其音源格式本就统一；tvbox 源更杂，故收紧。）
+    mpv_set_option_string(m_mpv, "audio-samplerate", "48000");
+    mpv_set_option_string(m_mpv, "audio-format", "s16");
     mpv_set_option_string(m_mpv, "keep-open", "yes");
     mpv_set_option_string(m_mpv, "demuxer-max-bytes", "64MiB");
     mpv_set_option_string(m_mpv, "demuxer-max-back-bytes", "32MiB");
@@ -84,7 +90,7 @@ bool Player::init() {
 void Player::open(const std::string& url) {
     if (!m_mpv || url.empty()) return;
     m_lastUrl       = url;   // v1.21：记录用于 -13 自动重试
-    m_audioRetried = false;  // v1.21：新源重置重试标志
+    m_audioRetryStage = 0;    // v1.25：新源重置音频重试阶段
     // 防盗链：源站 m3u8 多数校验 Referer 域名，从 URL 提取源站域名设置（v1.18）
     size_t schemePos = url.find("://");
     if (schemePos != std::string::npos) {
@@ -208,15 +214,19 @@ void Player::processEvents() {
                     appendMpvLog("END_FILE ERROR code=" + std::to_string(end->error) +
                                  " (" + err + ") url=" + m_lastUrl);
                     // 音频输出初始化失败 (code -13 = MPV_ERROR_AO_INIT_FAILED)：与具体源的音频流有关，
-                    // 多数情况是采样率/格式不被 Switch audren 支持。自动用 Switch 兼容参数（48kHz/s16/stereo）
-                    // 重试该源一次（v1.21）。重试成功则保住画面与声音；重试仍失败才上报错误，避免误杀能播的源。
-                    if (end->error == MPV_ERROR_AO_INIT_FAILED && !m_audioRetried && !m_lastUrl.empty()) {
-                        m_audioRetried = true;
-                        mpv_set_property_string(m_mpv, "audio-samplerate", "48000");
-                        mpv_set_property_string(m_mpv, "audio-format", "s16");
-                        mpv_set_property_string(m_mpv, "audio-channels", "stereo");
-                        brls::Logger::info("mpv: AO init failed on this source; "
-                                           "retrying with Switch-compatible audio (48k/s16/stereo)...");
+                    // 即便上面已全局约束 48k/s16/stereo，极少数源仍可能让 audren 初始化失败。
+                    // 兜底：先切到 ao=null（静音但必然能初始化的空音频后端）重试一次，保证至少能播；
+                    // 若仍失败再上报错误，避免误杀能播的源（v1.25）。
+                    if (end->error == MPV_ERROR_AO_INIT_FAILED && m_audioRetryStage < 2 && !m_lastUrl.empty()) {
+                        m_audioRetryStage++;
+                        if (m_audioRetryStage == 1) {
+                            mpv_set_property_string(m_mpv, "ao", "null");
+                            brls::Logger::info("mpv: AO init failed on this source; "
+                                               "fallback to ao=null (silent) and retry...");
+                        } else {
+                            // 第二次仍失败：放弃，交给下方错误弹窗
+                            break;
+                        }
                         const char* cmd[] = {"loadfile", m_lastUrl.c_str(), "replace", nullptr};
                         mpv_command_async(m_mpv, 0, cmd);
                         break;  // 不发错误弹窗，等重试结果
