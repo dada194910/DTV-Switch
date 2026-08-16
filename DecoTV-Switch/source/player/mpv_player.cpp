@@ -8,6 +8,16 @@
 #include <cstdlib>
 #include <cstring>
 
+// 把关键 mpv 错误追加写入 sdmc 日志，便于真机排错（v1.22）
+static void appendMpvLog(const std::string& line) {
+    FILE* f = fopen("sdmc:/switch/DecoTV/mpv.log", "a");
+    if (f) {
+        fputs(line.c_str(), f);
+        fputc('\n', f);
+        fclose(f);
+    }
+}
+
 namespace mpv_player {
 
 Player::~Player() {
@@ -40,7 +50,11 @@ bool Player::init() {
                           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0 Safari/537.36");
     // 注意：不在初始化时全局禁用音频。经验证本构建里 audio=no 不生效，且对能出声的源
-    // 反而可能误杀声音。音频初始化失败 (code -13) 改为「按源重试」处理，见 processEvents()（v1.21）。
+    // 反而可能误杀声音。音频初始化失败 (code -13) 改为「静默降级」处理：
+    // audio-fallback-to-null=yes 让 ao 初始化失败时自动退到 ao_null（无声），
+    // 不再以 -13 中断整段播放（这才是 mpv 处理 -13 的正解，v1.22 重新启用）。
+    // 若个别源仍走到 END_FILE -13，processEvents() 会按源重试一次兜底。
+    mpv_set_option_string(m_mpv, "audio-fallback-to-null", "yes");
 
     if (mpv_initialize(m_mpv) < 0) {
         brls::Logger::error("mpv: mpv_initialize failed");
@@ -189,6 +203,9 @@ void Player::processEvents() {
                 if (end->reason == MPV_END_FILE_REASON_ERROR) {
                     std::string err = mpv_error_string(end->error);
                     brls::Logger::error("mpv: end file ERROR (code {}) {}", end->error, err);
+                    // 落盘记录真实 ao 错误，便于后续按源对症（v1.22）
+                    appendMpvLog("END_FILE ERROR code=" + std::to_string(end->error) +
+                                 " (" + err + ") url=" + m_lastUrl);
                     // 音频输出初始化失败 (code -13 = MPV_ERROR_AO_INIT_FAILED)：与具体源的音频流有关，
                     // 多数情况是采样率/格式不被 Switch audren 支持。自动用 Switch 兼容参数（48kHz/s16/stereo）
                     // 重试该源一次（v1.21）。重试成功则保住画面与声音；重试仍失败才上报错误，避免误杀能播的源。
