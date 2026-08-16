@@ -48,7 +48,8 @@ for pkg in "switch-ffmpeg-7.1-1-any.pkg.tar.zst" "switch-libmpv_deko3d-0.36.0-2-
     if [ ! -f "/tmp/$pkg" ]; then
         curl -sL -m 180 -o "/tmp/$pkg" "$MPV_BASE/$pkg" || echo "  !! download $pkg failed"
     fi
-    dkp-pacman -U --noconfirm "/tmp/$pkg" >/dev/null 2>&1 || echo "  !! install $pkg failed (maybe installed)"
+    echo "  installing $pkg ..."
+    dkp-pacman -U --noconfirm "/tmp/$pkg" || echo "  !! install $pkg failed (see error above)"
 done
 # 确认 mpv 头文件可用
 if [ -f "$PORTLIBS_PREFIX/include/mpv/client.h" ]; then
