@@ -51,10 +51,9 @@ ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
 # 网络层：libcurl（switch-curl，SSL 后端 libnx）+ zlib
-# P4b 播放：libmpv（switch-libmpv_deko3d 预编译包）静态依赖链很长
-# （ffmpeg/placebo/libarchive/lua/jpeg/dav1d...），直接用 mpv.pc 的 Libs.private
-# 完整链接参数（pkg-config --static），避免手写漏库
-LIBS	:= -lcurl $(shell pkg-config --static --libs mpv 2>/dev/null) -lz -lm
+# P4b 播放：libmpv（wiliwili deko3d 预编译包）静态依赖链很长，
+# 用 dkp-pkg-config --static --libs mpv 取完整链接参数（mpv.pc 的 Libs.private）
+LIBS	:= -lcurl $(shell dkp-pkg-config --static --libs mpv 2>/dev/null) -lz -lm
 
 #---------------------------------------------------------------------------------
 # 库目录列表（顶层含 include 和 lib）；switch-deko3d 装到 $(PORTLIBS)
