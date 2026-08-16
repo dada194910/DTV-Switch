@@ -441,6 +441,16 @@ int main(int argc, char* argv[]) {
 
     brls::Application::createWindow("DecoTV");
     brls::Application::setGlobalQuit(true);   // [+] 全局退出
+
+    // v1.28：优雅退出。按 HOME 关闭程序时，libnx 默认会强杀进程，
+    // 导致 Activity 析构链(~PlayerActivity::destroy 释放 audren)与 exitNetwork(sslExit/清缓存)
+    // 走不到，audren/ssl 会话残留 → 下次启动崩溃。
+    // 注册 applet 退出钩子，在程序被要求退出时请求 borealis 退出主循环，
+    // 让清理链正常走完（v1.28 修复"退出再打开崩溃"）。
+    static AppletHookCookie s_appletHook;
+    appletHook(&s_appletHook, AppletHookType_OnExit,
+               [](AppletHookType, void*) { brls::Application::quit(); }, nullptr);
+
     setupChineseFont();
 
     // ---- 启动自检：登录 + 拉分类 ----
