@@ -183,7 +183,7 @@ bool initNetwork() {
 
 void exitNetwork() {
     // 退出时清理视频缓存：mpv 磁盘缓存片段留在 SD 卡会无限堆积（Switch 不自动清），
-    // 这里在进程结束前清掉 cache/mpv/*，避免占满卡（v2.01）。cache/img 海报保留（可复用）。
+    // 这里在进程结束前清掉 cache/mpv/*，避免占满卡（v2.00）。cache/img 海报保留（可复用）。
     removeDirFiles(MPV_DIR);
     curl_global_cleanup();
     // 注意：不调 sslExit()（v1.28 教训：脏状态跨进程残留 -> 再启动 HTTPS 全废/系统崩溃）。
