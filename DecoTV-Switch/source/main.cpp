@@ -6,6 +6,7 @@
 #include <switch.h>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -207,7 +208,7 @@ class PlayerActivity : public brls::Activity {
 class DetailActivity : public brls::Activity {
   public:
     explicit DetailActivity(decotv::VideoItem v) : m_video(std::move(v)) {}
-    ~DetailActivity() override { m_alive = false; }  // v1.22：停掉后台搜索线程，避免悬垂访问
+    ~DetailActivity() override { *m_alive = false; }  // v1.23：置标志 false；原子由 shared_ptr 控制块保活，不碰已释放的 this
 
     brls::View* createContentView() override {
         m_info = new brls::Label();
@@ -244,18 +245,21 @@ class DetailActivity : public brls::Activity {
         // 之前 load() 在 UI 线程同步串行请求（1 次拉源 + 最多 6 次源搜索，每次 30s 超时+重试），
         // 最坏要等数分钟。现在后台跑，结果分批投递到 UI 线程渐进显示。
         // m_alive 在析构时置 false，后台线程检测到即停手，防止访问已销毁的 View。
+        // v1.23 修复：存活标志用 shared_ptr 持有，使后台线程与排队的 brls::sync 回调
+        // 在 Activity 被销毁后仍能安全判活（不再访问已释放的 this → 杜绝 use-after-free 死机）。
+        auto alive = m_alive;
         std::string title = m_video.title;
-        std::thread([this, title]() {
+        std::thread([this, alive, title]() {
             auto sources = decotv::fetchTvboxSources();
             int limit = (int)sources.size() < 6 ? (int)sources.size() : 6;
 
             for (int i = 0; i < limit; ++i) {
-                if (!m_alive) return;                       // 用户已返回，放弃后续请求
+                if (!*alive) return;                       // 用户已返回，放弃后续请求
                 auto hits = decotv::searchTvboxSource(sources[i], title);
                 if (hits.empty()) continue;
                 // 把本批结果投递到 UI 线程加行（渐进显示，界面不卡）
-                brls::sync([this, hits]() {
-                    if (!m_alive) return;
+                brls::sync([this, alive, hits]() {
+                    if (!*alive) return;                   // Activity 已销毁，安全放弃
                     bool firstBatch = !m_focusGiven;
                     for (auto& h : hits) {
                         std::string sub = h.playUrl;
@@ -276,8 +280,8 @@ class DetailActivity : public brls::Activity {
                 });
             }
 
-            brls::sync([this]() {
-                if (!m_alive) return;
+            brls::sync([this, alive]() {
+                if (!*alive) return;                       // Activity 已销毁，安全放弃
                 if (m_rows.empty()) {
                     auto* lbl = new brls::Label();
                     lbl->setText("未找到可用播放源（或网络失败）");
@@ -296,7 +300,7 @@ class DetailActivity : public brls::Activity {
     brls::Label* m_info = nullptr;
     brls::Box* m_listBox = nullptr;
     std::vector<brls::View*> m_rows;
-    std::atomic<bool> m_alive{true};   // v1.22：后台搜索线程存活标志
+    std::shared_ptr<std::atomic<bool>> m_alive = std::make_shared<std::atomic<bool>>(true);   // v1.23：存活标志（shared_ptr 持有，线程/回调可安全判活）
     bool m_focusGiven = false;          // v1.22：仅首次结果聚焦第一行
 };
 
