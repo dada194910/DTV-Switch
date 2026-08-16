@@ -54,7 +54,15 @@ for pkg in "libuam-f8c9eef01ffe06334d530393d636d69e2b52744b-1-any.pkg.tar.zst" \
     echo "  installing $pkg ..."
     dkp-pacman -U --noconfirm "/tmp/$pkg" || echo "  !! install $pkg failed (see error above)"
 done
-# 确认 mpv 头文件可用
+# 确认 mpv 头文件可用（诊断路径）
+echo "  PORTLIBS_PREFIX=$PORTLIBS_PREFIX"
+for cand in "$PORTLIBS_PREFIX/include/mpv/client.h" \
+            "/opt/devkitpro/portlibs/switch/include/mpv/client.h" \
+            "/opt/devkitpro/portlibs/switch/include/mpv/client.h"; do
+    if [ -f "$cand" ]; then echo "  mpv header found: $cand"; fi
+done
+ls "$PORTLIBS_PREFIX/include/" 2>/dev/null | head -20
+ls "$PORTLIBS_PREFIX/lib/" 2>/dev/null | grep -iE "mpv|avcodec|libuam" | head
 if [ -f "$PORTLIBS_PREFIX/include/mpv/client.h" ]; then
     echo "  mpv headers OK"
 else
