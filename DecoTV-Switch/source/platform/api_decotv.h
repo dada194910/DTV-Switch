@@ -17,13 +17,17 @@ struct TvboxSite {
     bool searchable = true;
 };
 
-// 源搜索结果（标准 tvbox：wd=关键词&ac=detail 返回 list，每个含 vod_play_url）
-struct TvboxHit {
-    std::string sourceKey;   // 命中源 key
-    std::string sourceName;  // 命中源显示名
-    std::string vodId;       // 资源站视频 id
-    std::string vodName;     // 资源站片名
-    std::string playUrl;     // 解析后的播放地址（m3u8/mp4）
+// 视频条目（搜索/分类返回）。pic=海报，playUrl=直接可播地址（搜索即带），
+// episodes 为分集（name/url 一一对应，详情页才有）。
+struct VodItem {
+    std::string sourceKey;
+    std::string sourceName;
+    std::string vodId;
+    std::string vodName;
+    std::string pic;       // 海报 URL
+    std::string playUrl;   // 已解析的可播地址（搜索结果直接给）
+    std::vector<std::string> episodeNames;
+    std::vector<std::string> episodeUrls;  // 未解析时为 only playUrl
 };
 
 // HTTP 请求结果（用于界面排错显示）
@@ -45,20 +49,35 @@ extern unsigned int g_netInitResult;
 std::vector<TvboxSite> loadConfig();
 
 // 标准 tvbox 搜索：GET {api}?wd=关键词&ac=detail（ac=detail 才返回 vod_play_url）
-std::vector<TvboxHit> searchSite(const TvboxSite& src, const std::string& keyword,
-                                 HttpResponse* out = nullptr);
+std::vector<VodItem> searchSite(const TvboxSite& src, const std::string& keyword,
+                                HttpResponse* out = nullptr);
 
 // 跨所有源搜索（合并各源结果，最多取前 8 个源）
-std::vector<TvboxHit> searchAllSources(const std::vector<TvboxSite>& sites,
-                                       const std::string& keyword);
+std::vector<VodItem> searchAllSources(const std::vector<TvboxSite>& sites,
+                                      const std::string& keyword);
+
+// 详情：GET {api}?ac=detail&ids=<vodId> -> 解析 vod_play_url 为分集
+VodItem fetchDetail(const TvboxSite& src, const std::string& vodId);
 
 // vod_play_url 解析（优先真实媒体直链，避开 /share/、/play/ 页面地址）
 std::string parsePlayUrl(const std::string& raw);
+
+// 把 vod_play_url 拆成 name/url 分集列表（用于详情页选集）
+void parseEpisodes(const std::string& raw, std::vector<std::string>& names,
+                   std::vector<std::string>& urls);
 
 // 崩溃轨迹日志：关键节点落 sdmc:/switch/DecoTV/trail.log，崩后看最后一行即知根因
 void trailLog(const std::string& line);
 
 // 内部 GET helper：结果写入 out；传输失败自动重试 2 次
 void httpGet(const std::string& url, bool withCookies, HttpResponse* out);
+
+// ---- 缓存管理（海报 cache/img + 视频缓存 cache/mpv，统一管、及时清）----
+// 把海报 URL 下载到 cache/img（已存在则直接复用），返回本地路径；失败返回空。
+std::string cacheImage(const std::string& url);
+// 清空所有缓存（cache/img + cache/mpv），返回是否成功
+bool clearCache();
+// 缓存总大小（字节）
+long cacheSizeBytes();
 
 }  // namespace decotv
