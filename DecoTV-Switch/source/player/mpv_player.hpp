@@ -73,6 +73,9 @@ class Player {
 
     EventCallback m_cb;
     bool m_inited = false;
+
+    std::string m_lastUrl;        // 当前播放 URL（v1.21：用于 -13 自动重试）
+    bool m_audioRetried = false;  // 是否已对当前源做过音频兼容重试（防止死循环）
 };
 
 }  // namespace mpv_player
