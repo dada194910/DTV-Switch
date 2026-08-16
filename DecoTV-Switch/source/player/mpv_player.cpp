@@ -39,6 +39,10 @@ bool Player::init() {
     mpv_set_option_string(m_mpv, "user-agent",
                           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0 Safari/537.36");
+    // 音频输出设备初始化失败时降级为静音而非中止播放（v1.19）。
+    // 部分源站/流会出现 code -13 (MPV_ERROR_AO_INIT_FAILED)，属音频设备问题，
+    // 与视频解码无关；降级后视频照常播放，避免"加载失败"盖住画面。
+    mpv_set_option_string(m_mpv, "audio-fallback-to-null", "yes");
 
     if (mpv_initialize(m_mpv) < 0) {
         brls::Logger::error("mpv: mpv_initialize failed");
@@ -157,8 +161,19 @@ void Player::processEvents() {
             case MPV_EVENT_LOG_MESSAGE: {
                 // libmpv 的 MPV_LOG_LEVEL_* 是字符串宏（"error"/"fatal"...），用 strcmp 判断
                 auto* log = static_cast<mpv_event_log_message*>(ev->data);
-                if (strcmp(log->level, "error") == 0 || strcmp(log->level, "fatal") == 0) {
-                    if (m_cb) m_cb(Event::ERROR, 0, std::string(log->prefix) + ": " + log->text);
+                std::string lvl(log->level);
+                // 音频输出初始化失败（code -13）已通过 audio-fallback-to-null 静默降级为静音，
+                // 其日志（含 "audio"/"AO"/"fallback"）非致命，不该弹窗盖住画面（v1.19）
+                bool isAudioLog = (strstr(log->text, "audio") != nullptr ||
+                                   strstr(log->text, "AO:") != nullptr ||
+                                   strstr(log->text, "fallback") != nullptr);
+                if (lvl == "fatal" && !isAudioLog) {
+                    std::string msg = std::string(log->prefix) + ": " + log->text;
+                    brls::Logger::error("mpv fatal: {}", msg);
+                    if (m_cb) m_cb(Event::ERROR, 0, msg);
+                } else if (lvl == "error" || lvl == "fatal") {
+                    // error 级（含音频降级）仅记录，不弹窗；真正的致命加载失败由 END_FILE 上报
+                    brls::Logger::error("mpv {}: {}", log->prefix, log->text);
                 } else {
                     brls::Logger::debug("mpv {}: {}", log->prefix, log->text);
                 }
