@@ -102,7 +102,7 @@ static bool looksLikeMedia(const std::string& u) {
 //   正片$https://a.com/x.m3u8
 //   720P$https://a.com/share/XXX$$$720P$https://a.com/x.m3u8
 // 策略：按 $$$ 拆块，取第一集在各块的候选地址，优先真实媒体直链，挑不到退回首个候选。
-static std::string parsePlayUrl(const std::string& raw) {
+std::string parsePlayUrl(const std::string& raw) {
     if (raw.empty()) return "";
 
     std::vector<std::string> blocks;
