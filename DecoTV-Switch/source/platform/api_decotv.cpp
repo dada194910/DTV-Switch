@@ -174,14 +174,21 @@ bool initNetwork() {
 }
 
 void exitNetwork() {
-    // 清理本程序持久化的登录态缓存（Switch 不自动清）。
-    // 凭据写死在代码，下次启动自动重新登录，清空 cookie 无副作用，
-    // 避免脏/过期 cookie 影响下次启动（v1.28）。诊断日志(mpv.log/source.log)保留：体积小，崩后可定位。
-    unlink("sdmc:/switch/DecoTV/cookies.txt");
-
     curl_global_cleanup();
-    sslExit();   // 与 initNetwork() 的 sslInitialize(8) 配对，释放 SSL 服务会话（v1.28 修复遗漏）
-    // socketExit 由 borealis 的 userAppExit 负责，这里不重复调用
+
+    // ⚠️ v1.29 回滚警告：**绝对不要在这里调 sslExit()**。
+    // v1.28 曾以「与 sslInitialize(8) 配对」为由加上，结果造成严重回归：
+    //   全部 HTTPS 播放地址加载失败(mpv code -13 LOADING_FAILED)，且再次启动直接系统崩溃 2168-0002，
+    //   必须重启主机才恢复。原因：ssl 是系统级 sysmodule，curl 的 libnx TLS 后端可能仍持有
+    //   ssl 上下文，此时关闭服务会话会把 sysmodule 会话表弄脏，而该脏状态**跨进程启动残留**
+    //   （只有重启主机才清）→ 下次启动 HTTPS 全废 / 初始化崩溃。
+    // 本程序自己的 API 是 HTTP，故当时表现为「UI 和选源正常，但一播就 -13」。
+    // 进程退出时 libnx 会自动回收服务句柄，无需也不应手动 sslExit()。
+    //
+    // socketExit 由 borealis 的 userAppExit 负责，这里不重复调用。
+    //
+    // 关于「清缓存」：cookies.txt 是功能性登录态（极小，且删了会强制每次重登），不作为垃圾清理；
+    // 真正会无限膨胀的是 mpv.log / source.log，已在写入侧加 256KB 上限（见 logOpenMode）。
 }
 
 bool hasSavedLogin() {
