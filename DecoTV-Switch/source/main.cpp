@@ -2,7 +2,7 @@
 // 首页：用户源列表 + 「搜索全部」；源内：搜索此源。标准 tvbox 协议搜出后直接播放。
 #include <borealis.hpp>
 #include <switch.h>
-#include <switch/swkbd.h>
+#include <switch/applets/swkbd.h>
 #include <functional>
 #include <string>
 #include <vector>
@@ -52,13 +52,15 @@ static brls::Box* makeRow(const std::string& mainText, const std::string& subTex
 // ---- tvbox 软键盘输入（libnx Swkbd，最可靠）----
 static std::string showKeyboard(const std::string& hint) {
     SwkbdConfig kbd;
-    swkbdInit(&kbd, SwkbdType_QWERTY, 1, -1);
-    swkbdSetHint(&kbd, hint.c_str());
+    swkbdCreate(&kbd, 0);
+    swkbdConfigMakePresetDefault(&kbd);          // 内部已设 SwkbdType_QWERTY
+    swkbdConfigSetHeaderText(&kbd, hint.c_str());
     swkbdConfigSetOkButtonText(&kbd, "搜索");
     char buf[256] = {0};
-    SwkbdButton res = swkbdGetText(&kbd, buf, sizeof(buf));
-    swkbdExit(&kbd);
-    return (res == SWKBD_BUTTON_CONFIRM) ? std::string(buf) : std::string();
+    Result rc = swkbdShow(&kbd, buf, sizeof(buf));
+    swkbdClose(&kbd);
+    std::string s(buf);
+    return (R_SUCCEEDED(rc) && !s.empty()) ? s : std::string();
 }
 
 // ---- 视频画面视图（libmpv 软渲染帧 → nanovg 纹理）----
