@@ -331,6 +331,67 @@ std::vector<VodItem> searchAllSources(const std::vector<TvboxSite>& sites,
     return result;
 }
 
+// ---- 豆瓣推荐（仿 TVBox：首页用豆瓣热门榜单）----
+// 豆瓣对 UA/Referer 有反爬，这里用浏览器 UA + Referer + 自动解压，超时也收紧避免卡首页
+static void doubanHttpGet(const std::string& url, HttpResponse* out) {
+    std::string body;
+    CURL* curl = makeHandle(&body);
+    if (!curl) { if (out) *out = HttpResponse(); return; }
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);          // 单请求上限 8s，防卡首页
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    struct curl_slist* hdr = nullptr;
+    hdr = curl_slist_append(hdr, "Referer: https://movie.douban.com/");
+    hdr = curl_slist_append(hdr, "Accept: application/json, text/plain, */*");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");  // 自动 gzip/deflate 解压
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    bool ok = false;
+    for (int a = 0; a < 2; ++a) {
+        body.clear();
+        ok = perform(curl, out);
+        if (ok) break;
+        sleep(1);
+    }
+    curl_slist_free_all(hdr);
+    curl_easy_cleanup(curl);
+    if (out) out->body = body;
+}
+
+// 拉取豆瓣「热门」榜单，合并成首页海报墙（上限 30 张）。失败/空返回空 vector。
+std::vector<VodItem> fetchDoubanRecommend() {
+    std::vector<VodItem> out;
+    const char* tag = "热门";
+    std::string u = "https://movie.douban.com/j/search_subjects?type=movie&tag="
+                  + urlEncode(tag) + "&sort=recommend&page_limit=24&page_start=0";
+    HttpResponse resp;
+    doubanHttpGet(u, &resp);
+    if (resp.status != 200 || resp.body.empty()) {
+        trailLog("douban: status=" + std::to_string(resp.status) +
+                 " curl=" + std::to_string(resp.curlError));
+        return out;
+    }
+    try {
+        json j = json::parse(resp.body, nullptr, false);
+        if (!j.contains("subjects") || !j["subjects"].is_array()) return out;
+        for (auto& s : j["subjects"]) {
+            VodItem it;
+            it.sourceKey  = "douban";
+            it.sourceName = "豆瓣·热门";
+            it.vodName    = s.value("title", "");
+            it.vodId      = s.value("id", "");
+            it.pic        = s.value("cover", "");
+            it.playUrl    = "";   // 豆瓣无直链，点击转去源里搜片名
+            if (!it.vodName.empty()) out.push_back(std::move(it));
+            if (out.size() >= 30) break;
+        }
+    } catch (...) {}
+    trailLog("douban: got " + std::to_string(out.size()) + " items");
+    return out;
+}
+
 // ---- 详情：GET {api}?ac=detail&ids=<vodId> -> 解析分集 ----
 VodItem fetchDetail(const TvboxSite& src, const std::string& vodId) {
     VodItem item;
