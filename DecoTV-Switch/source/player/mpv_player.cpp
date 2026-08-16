@@ -110,8 +110,11 @@ void Player::resizeSurface(int w, int h) {
 
 bool Player::renderFrame() {
     if (!m_rc || !m_pixels) return false;
-    // 只在 mpv 提示有新帧时渲染（省 CPU；无帧时画面保持）
-    if (!m_needRender.exchange(false)) return false;
+    // 只在 mpv 提示有新帧时渲染（省 CPU；无帧时画面保持）。
+    // 首帧特殊：软渲染模式下视频解码由 render 调用驱动，初始没有 update 回调，
+    // 必须无条件渲染一次让 mpv 开始输出帧（否则永远无画面，只有声音）
+    bool dirty = m_needRender.exchange(false) || !m_everRendered;
+    if (!dirty) return false;
 
     int size[2] = {m_swW, m_swH};
     mpv_render_param params[] = {
@@ -123,6 +126,7 @@ bool Player::renderFrame() {
     };
     if (mpv_render_context_render(m_rc, params) < 0) return false;
     mpv_render_context_report_swap(m_rc);
+    m_everRendered = true;
     return true;
 }
 
