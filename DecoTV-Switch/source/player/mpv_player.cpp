@@ -35,6 +35,10 @@ bool Player::init() {
     mpv_set_option_string(m_mpv, "keep-open", "yes");
     mpv_set_option_string(m_mpv, "demuxer-max-bytes", "64MiB");
     mpv_set_option_string(m_mpv, "demuxer-max-back-bytes", "32MiB");
+    // 防盗链：很多源站按 UA 白名单校验，用浏览器 UA（v1.18）
+    mpv_set_option_string(m_mpv, "user-agent",
+                          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0 Safari/537.36");
 
     if (mpv_initialize(m_mpv) < 0) {
         brls::Logger::error("mpv: mpv_initialize failed");
@@ -62,6 +66,19 @@ bool Player::init() {
 
 void Player::open(const std::string& url) {
     if (!m_mpv || url.empty()) return;
+    // 防盗链：源站 m3u8 多数校验 Referer 域名，从 URL 提取源站域名设置（v1.18）
+    size_t schemePos = url.find("://");
+    if (schemePos != std::string::npos) {
+        size_t hostStart = schemePos + 3;
+        size_t hostEnd   = url.find('/', hostStart);
+        if (hostEnd == std::string::npos) hostEnd = url.find('?', hostStart);
+        if (hostEnd == std::string::npos) hostEnd = url.length();
+        std::string scheme = url.substr(0, schemePos);
+        std::string host   = url.substr(hostStart, hostEnd - hostStart);
+        std::string ref    = "Referer: " + scheme + "://" + host + "/";
+        mpv_set_option_string(m_mpv, "http-header-fields", ref.c_str());
+        brls::Logger::info("mpv: referer set -> {}", ref);
+    }
     brls::Logger::info("mpv: loading {}", url);
     const char* cmd[] = {"loadfile", url.c_str(), nullptr};
     mpv_command_async(m_mpv, 0, cmd);
@@ -151,10 +168,23 @@ void Player::processEvents() {
                 brls::Logger::info("mpv: file loaded");
                 if (m_cb) m_cb(Event::LOADED, 0, "");
                 break;
-            case MPV_EVENT_END_FILE:
-                brls::Logger::info("mpv: end file");
-                if (m_cb) m_cb(Event::ENDED, 0, "");
+            case MPV_EVENT_END_FILE: {
+                // 区分结束原因：EOF 正常结束；ERROR 是加载/播放失败（v1.18）
+                auto* end = static_cast<mpv_event_end_file*>(ev->data);
+                if (end->reason == MPV_END_FILE_REASON_ERROR) {
+                    std::string err = mpv_error_string(end->error);
+                    brls::Logger::error("mpv: end file ERROR (code {}) {}", end->error, err);
+                    if (m_cb) m_cb(Event::ERROR, 0,
+                                   "加载失败: " + err + " (code " + std::to_string(end->error) + ")");
+                } else if (end->reason == MPV_END_FILE_REASON_EOF) {
+                    brls::Logger::info("mpv: end file EOF");
+                    if (m_cb) m_cb(Event::ENDED, 0, "");
+                } else {
+                    brls::Logger::info("mpv: end file reason={}", end->reason);
+                    if (m_cb) m_cb(Event::ENDED, 0, "播放停止");
+                }
                 break;
+            }
             default:
                 break;
         }
