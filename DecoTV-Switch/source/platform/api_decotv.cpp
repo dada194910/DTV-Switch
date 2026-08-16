@@ -1,8 +1,5 @@
-// DecoTV Switch 客户端 —— 网络层实现
-// 实测接口（2026-08-15 沙箱 curl 验证）：
-//   POST /api/login  {"username","password"}  ->  {"ok":true} + Set-Cookie: auth=...
-//   GET  /api/categories（带 cookie）         ->  {"version":1,"categories":[{key,label,...}]}
-// 无 cookie 请求 /api/categories -> HTTP 401（空响应）
+// DecoTV Switch 客户端 —— 网络层实现（纯 TVBox 客户端）
+// 标准 tvbox 协议：GET {api}?wd=关键词&ac=detail 搜索，返回 vod_play_url 由 parsePlayUrl 解析。
 #include <switch.h>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -11,6 +8,7 @@
 
 #include <sys/stat.h>
 #include <unistd.h>
+#include <ctime>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -25,7 +23,7 @@ using json = nlohmann::json;
 
 unsigned int g_netInitResult = 0;
 
-// ---- URL 编码（中文参数如 热门/豆瓣高分 需要）----
+// ---- URL 编码（中文参数如片名需要）----
 static std::string urlEncode(const std::string& s) {
     std::string out;
     for (unsigned char c : s) {
@@ -40,17 +38,16 @@ static std::string urlEncode(const std::string& s) {
     return out;
 }
 
-// ---- curl 写回调：把响应体追加进 std::string ----
+// ---- curl 写回调 ----
 static size_t writeToString(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t total = size * nmemb;
     ((std::string*)userp)->append((char*)contents, total);
     return total;
 }
 
-// 把 tvbox 选源诊断信息落盘（v1.26），便于真机排错（brls 日志在 Switch 上不可见）
-// v1.28：加体积上限。append 模式会无限增长（Switch 不会替我们清），
-// 超过 256KB 就改用 "w" 覆盖重来，保证日志既有用又不会吃满 SD 卡。
+// 选源诊断日志（落 sdmc，便于真机排错）。append 模式会无限增长，超过 256KB 覆盖重写。
 static const long LOG_MAX_BYTES = 256 * 1024;
+static const char* SOURCE_LOG = "sdmc:/switch/DecoTV/source.log";
 
 static const char* logOpenMode(const char* path) {
     struct stat st;
@@ -59,8 +56,7 @@ static const char* logOpenMode(const char* path) {
 }
 
 static void decotvLog(const std::string& line) {
-    const char* path = "sdmc:/switch/DecoTV/source.log";
-    FILE* f = fopen(path, logOpenMode(path));
+    FILE* f = fopen(SOURCE_LOG, logOpenMode(SOURCE_LOG));
     if (f) {
         fputs(line.c_str(), f);
         fputc('\n', f);
@@ -68,11 +64,28 @@ static void decotvLog(const std::string& line) {
     }
 }
 
-// 判断一个地址是否像「可直接播放的媒体直链」（而非 /share/、/play/ 这类分享/页面地址）
+// 崩溃轨迹日志：关键节点落盘，崩后读卡看最后一行即知崩在哪一步。超 256KB 覆盖。
+static const char* TRAIL_LOG = "sdmc:/switch/DecoTV/trail.log";
+void trailLog(const std::string& line) {
+    time_t now = time(nullptr);
+    struct tm t;
+    localtime_r(&now, &t);
+    char ts[32];
+    snprintf(ts, sizeof(ts), "%04d-%02d-%02d %02d:%02d:%02d",
+             t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+             t.tm_hour, t.tm_min, t.tm_sec);
+    FILE* f = fopen(TRAIL_LOG, logOpenMode(TRAIL_LOG));
+    if (f) {
+        fprintf(f, "[%s] %s\n", ts, line.c_str());
+        fclose(f);
+    }
+}
+
+// 判断地址是否像可直接播放的媒体直链（而非 /share/、/play/ 页面地址）
 static bool looksLikeMedia(const std::string& u) {
     std::string s = u;
     size_t q = s.find('?');
-    if (q != std::string::npos) s = s.substr(0, q);   // 去掉查询参数再判扩展名
+    if (q != std::string::npos) s = s.substr(0, q);
     const char* exts[] = {".m3u8", ".m3u", ".mp4", ".ts", ".flv",
                           ".mkv", ".webm", ".mov", ".aac", ".mp3"};
     for (const char* e : exts) {
@@ -85,18 +98,13 @@ static bool looksLikeMedia(const std::string& u) {
 }
 
 // 把 TVBox 的 vod_play_url 解析出第一个可播放的媒体地址。
-// 形形色色，用 # 分隔剧集、$ 分隔「名称$地址」、$$$ 分隔不同清晰度/直链块与分享页块：
+// 用 # 分隔剧集、$ 分隔「名称$地址」、$$$ 分隔不同清晰度/直链块与分享页块：
 //   正片$https://a.com/x.m3u8
-//   720P$https://a.com/share/XXX$$$720P$https://a.com/x.m3u8        (分享页在前，真链在后)
-//   HD$https://a.com/x.m3u8$$$HD$https://a.com/share/YYY            (真链在前，分享页在后)
-//   第1集$/play/A#第2集$/play/B#...$$$第1集$/play/A/index.m3u8#...   (普通块 / m3u8 块)
-//   第01集$/share/Z#第02集$/share/W#...                              (仅分享页，无直链，需解析层才能播)
-// 策略：先按 $$$ 拆块（块间按集索引对齐），取第一集在各块里的候选地址，
-//       优先挑真实媒体直链（.m3u8/.mp4/.ts/... 或含 /index.m3u8），挑不到退回首个候选。
+//   720P$https://a.com/share/XXX$$$720P$https://a.com/x.m3u8
+// 策略：按 $$$ 拆块，取第一集在各块的候选地址，优先真实媒体直链，挑不到退回首个候选。
 static std::string parsePlayUrl(const std::string& raw) {
     if (raw.empty()) return "";
 
-    // 1) 按 $$$ 拆成多个「块」
     std::vector<std::string> blocks;
     size_t pos = 0;
     while (true) {
@@ -106,12 +114,11 @@ static std::string parsePlayUrl(const std::string& raw) {
         pos = d + 3;
     }
 
-    // 2) 每个块取「第一集」地址；块间按集索引对齐，汇集第一集的多个候选直链
     std::vector<std::string> candidates;
     for (auto& blk : blocks) {
         std::string ep = blk;
         size_t h = blk.find('#');
-        if (h != std::string::npos) ep = blk.substr(0, h);   // 取第一集
+        if (h != std::string::npos) ep = blk.substr(0, h);
         size_t d = ep.find('$');
         std::string url = (d != std::string::npos) ? ep.substr(d + 1) : ep;
         if (!url.empty()) {
@@ -122,84 +129,57 @@ static std::string parsePlayUrl(const std::string& raw) {
     }
     if (candidates.empty()) return "";
 
-    // 3) 优先真实媒体直链，其次退回首个候选
     for (auto& c : candidates) if (looksLikeMedia(c)) return c;
     return candidates[0];
 }
 
 // ---- 创建 curl easy handle ----
-// cookie 采用 libcurl 推荐模式：COOKIEFILE + COOKIEJAR 指向同一文件，
-// 每个请求都"读已有 cookie + 把新 Set-Cookie 写回"，保证登录态跨请求持久
+// 某些 tvbox 源有防盗链 cookie，沿用 COOKIEFILE+COOKIEJAR 同一文件读写（无害）。
 static CURL* makeHandle(std::string* outBody) {
     CURL* curl = curl_easy_init();
     if (!curl) return nullptr;
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToString);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, outBody);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);       // 15s 总超时（v1.24 收紧：原 30s 导致选源界面卡死）
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 6L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DecoTV-Switch/1.0");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DecoTV-Switch/2.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
-    // P4a：HTTPS 支持。switch-curl 的默认 SSL 后端是 libnx（系统 ssl 服务，
-    // initNetwork 里已 sslInitialize）。跳过证书校验：很多 TVBox 源站的证书
-    // 不在 Switch 系统 CA 里，且 homebrew 场景可接受（wiliwili 同款做法）
+    // HTTPS 支持：跳过证书校验（很多 tvbox 源站证书不在 Switch 系统 CA 内，homebrew 可接受）
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-    // 读 + 写同一个 cookie jar（关键：登录后的 auth cookie 靠它在后续请求带上）
-    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, COOKIE_PATH);
-    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, COOKIE_PATH);
+    mkdir("sdmc:/switch/DecoTV", 0777);
+    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "sdmc:/switch/DecoTV/cookies.txt");
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, "sdmc:/switch/DecoTV/cookies.txt");
 
     return curl;
 }
 
 bool initNetwork() {
-    // sdmc 挂载（cookie 持久化需要；libnx 4.x 用 fsdevMountSdmc，无对应 exit，进程结束自动清理）
     fsdevMountSdmc();
-    mkdir("sdmc:/switch/DecoTV", 0777);  // cookie 目录（幂等）
+    mkdir("sdmc:/switch/DecoTV", 0777);
 
-    // socket：borealis 的 userAppInit 已初始化（switch_wrapper.c），二次调用会返回
-    // AlreadyInitialized，此时 socket 已就绪，视为成功
     Result rc = socketInitializeDefault();
     g_netInitResult = rc;
     if (R_FAILED(rc) && rc != MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized))
         return false;
 
-    // P4a：初始化 libnx SSL 服务（curl 的 libnx TLS 后端需要；init.c 不自动初始化）
-    sslInitialize(8);
-
+    sslInitialize(8);   // curl 的 libnx TLS 后端需要；**退出时不要 sslExit()**（v1.28 教训）
     curl_global_init(CURL_GLOBAL_DEFAULT);
     return true;
 }
 
 void exitNetwork() {
     curl_global_cleanup();
-
-    // ⚠️ v1.29 回滚警告：**绝对不要在这里调 sslExit()**。
-    // v1.28 曾以「与 sslInitialize(8) 配对」为由加上，结果造成严重回归：
-    //   全部 HTTPS 播放地址加载失败(mpv code -13 LOADING_FAILED)，且再次启动直接系统崩溃 2168-0002，
-    //   必须重启主机才恢复。原因：ssl 是系统级 sysmodule，curl 的 libnx TLS 后端可能仍持有
-    //   ssl 上下文，此时关闭服务会话会把 sysmodule 会话表弄脏，而该脏状态**跨进程启动残留**
-    //   （只有重启主机才清）→ 下次启动 HTTPS 全废 / 初始化崩溃。
-    // 本程序自己的 API 是 HTTP，故当时表现为「UI 和选源正常，但一播就 -13」。
-    // 进程退出时 libnx 会自动回收服务句柄，无需也不应手动 sslExit()。
-    //
-    // socketExit 由 borealis 的 userAppExit 负责，这里不重复调用。
-    //
-    // 关于「清缓存」：cookies.txt 是功能性登录态（极小，且删了会强制每次重登），不作为垃圾清理；
-    // 真正会无限膨胀的是 mpv.log / source.log，已在写入侧加 256KB 上限（见 logOpenMode）。
+    // 注意：不调 sslExit()（v1.28 教训：脏状态跨进程残留 -> 再启动 HTTPS 全废/系统崩溃）。
+    // socketExit 由 borealis 的 userAppExit 负责。
 }
 
-bool hasSavedLogin() {
-    struct stat st;
-    return stat(COOKIE_PATH, &st) == 0;
-}
-
-// ---- 执行一次请求并填 HttpResponse；返回 curl 是否成功 ----
+// ---- 执行一次请求并填 HttpResponse ----
 static bool perform(CURL* curl, HttpResponse* out) {
     CURLcode res = curl_easy_perform(curl);
-
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     if (out) {
@@ -209,7 +189,7 @@ static bool perform(CURL* curl, HttpResponse* out) {
     return res == CURLE_OK;
 }
 
-void httpGet(const std::string& url, bool withCookies, HttpResponse* out) {
+void httpGet(const std::string& url, bool, HttpResponse* out) {
     HttpResponse resp;
     std::string body;
     CURL* curl = makeHandle(&body);
@@ -217,10 +197,8 @@ void httpGet(const std::string& url, bool withCookies, HttpResponse* out) {
         if (out) *out = resp;
         return;
     }
-
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 
-    // 传输失败自动重试 2 次（Switch 端偶发 DNS/连接失败，1s 间隔重试常可恢复；v1.24 由 3→2 收紧）
     bool ok = false;
     for (int attempt = 0; attempt < 2; ++attempt) {
         body.clear();
@@ -236,148 +214,75 @@ void httpGet(const std::string& url, bool withCookies, HttpResponse* out) {
 
     resp.body = body;
     if (out) *out = resp;
-
-    brls::Logger::info("decotv: GET {} -> HTTP {} (curl={}, {} bytes): {}",
-                       url, resp.status, resp.curlError, body.size(), body.substr(0, 120));
+    brls::Logger::info("decotv: GET {} -> HTTP {} (curl={}, {} bytes)",
+                       url, resp.status, resp.curlError, body.size());
 }
 
-bool login(const std::string& username, const std::string& password, HttpResponse* out) {
-    json reqBody;
-    reqBody["username"] = username;
-    reqBody["password"] = password;
-
-    std::string body;
-    CURL* curl = makeHandle(&body);
-    if (!curl) return false;
-
-    std::string postData = reqBody.dump();
-    curl_easy_setopt(curl, CURLOPT_URL, (std::string(BASE_URL) + "/api/login").c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)postData.size());
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "Accept: application/json");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    HttpResponse resp;
-    bool ok = perform(curl, &resp);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);  // 在此把 Set-Cookie 写入 COOKIE_PATH
-
-    if (out) *out = resp;
-
-    brls::Logger::info("decotv: login -> HTTP {} (curl={}, {} bytes): {}",
-                       resp.status, resp.curlError, body.size(), body.substr(0, 80));
-    if (!ok) return false;
-
-    // 解析 {"ok":true}
-    try {
-        json j = json::parse(body);
-        if (j.value("ok", false)) return true;
-    } catch (...) {
-        return false;
+// ---- 加载用户源配置 ----
+// config.json 格式（标准 tvbox 订阅子集）：
+// {
+//   "sites": [ {"key":"360zy","name":"TV-360资源",
+//              "api":"https://360zy.com/api.php/provide/vod","searchable":1}, ... ],
+//   "subscriptions": [ "https://某订阅/tvbox.json", ... ]   // 可选，远程订阅合并 sites
+// }
+std::vector<TvboxSite> loadConfig() {
+    std::vector<TvboxSite> result;
+    const char* path = "sdmc:/switch/DecoTV/config.json";
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        trailLog("loadConfig: config.json NOT FOUND");
+        return result;
     }
-    return false;
-}
-
-std::vector<Category> fetchCategories(HttpResponse* out) {
-    std::vector<Category> result;
-    HttpResponse resp;
-    httpGet(std::string(BASE_URL) + "/api/categories", true, &resp);
-    if (out) *out = resp;
-    if (resp.body.empty()) return result;
+    std::string content;
+    char buf[1024];
+    while (fgets(buf, sizeof(buf), f)) content += buf;
+    fclose(f);
 
     try {
-        json j = json::parse(resp.body);
-        if (!j.contains("categories") || !j["categories"].is_array()) return result;
-        for (auto& c : j["categories"]) {
-            Category cat;
-            cat.key   = c.value("key", "");
-            cat.label = c.value("label", "");
-            if (cat.key.empty()) continue;
-            // primary: [{label, value}]
-            if (c.contains("primary") && c["primary"].is_array()) {
-                for (auto& p : c["primary"]) {
-                    PrimaryTab tab;
-                    tab.label = p.value("label", "");
-                    tab.value = p.value("value", "");
-                    if (!tab.value.empty()) cat.primary.push_back(std::move(tab));
-                }
+        json j = json::parse(content);
+        auto addSite = [&](const json& s) {
+            TvboxSite site;
+            site.key  = s.value("key", "");
+            site.name = s.value("name", "");
+            site.api  = s.value("api", "");
+            site.searchable = s.value("searchable", 1) != 0;
+            if (!site.key.empty() && !site.api.empty()) result.push_back(site);
+        };
+        if (j.contains("sites") && j["sites"].is_array())
+            for (auto& s : j["sites"]) addSite(s);
+
+        if (j.contains("subscriptions") && j["subscriptions"].is_array()) {
+            for (auto& sub : j["subscriptions"]) {
+                std::string url = sub.get<std::string>();
+                HttpResponse resp;
+                httpGet(url, false, &resp);
+                if (resp.body.empty()) continue;
+                try {
+                    json sj = json::parse(resp.body);
+                    json sitesArr = sj.is_array() ? sj
+                                    : (sj.contains("sites") ? sj["sites"] : json::array());
+                    if (sitesArr.is_array())
+                        for (auto& s : sitesArr) addSite(s);
+                } catch (...) {}
             }
-            result.push_back(std::move(cat));
         }
     } catch (...) {
-        return result;
+        trailLog("loadConfig: parse failed");
     }
+    trailLog("loadConfig: loaded " + std::to_string(result.size()) + " sites");
     return result;
 }
 
-std::vector<VideoItem> fetchDoubanList(const std::string& kind, const std::string& category,
-                                       const std::string& type, int limit, int start,
-                                       HttpResponse* out) {
-    std::vector<VideoItem> result;
-    HttpResponse resp;
-
-    std::string url = std::string(BASE_URL) + "/api/douban/categories?kind=" + urlEncode(kind) +
-                      "&category=" + urlEncode(category) +
-                      "&type=" + urlEncode(type) +
-                      "&limit=" + std::to_string(limit) +
-                      "&start=" + std::to_string(start);
-    httpGet(url, true, &resp);
-    if (out) *out = resp;
-    if (resp.body.empty()) return result;
-
-    try {
-        json j = json::parse(resp.body);
-        if (!j.contains("list") || !j["list"].is_array()) return result;
-        for (auto& item : j["list"]) {
-            VideoItem v;
-            v.id    = item.value("id", "");
-            v.title = item.value("title", "");
-            v.poster = item.value("poster", "");
-            v.rate  = item.value("rate", "");
-            v.year  = item.value("year", "");
-            if (!v.title.empty()) result.push_back(std::move(v));
-        }
-    } catch (...) {
-        return result;
-    }
-    return result;
-}
-
-std::vector<TvboxSource> fetchTvboxSources(HttpResponse* out) {
-    std::vector<TvboxSource> result;
-    HttpResponse resp;
-    httpGet(std::string(BASE_URL) + "/api/search/resources", true, &resp);
-    if (out) *out = resp;
-    if (resp.body.empty()) return result;
-    try {
-        json j = json::parse(resp.body);
-        if (!j.is_array()) return result;
-        for (auto& s : j) {
-            TvboxSource src;
-            src.key  = s.value("key", "");
-            src.name = s.value("name", "");
-            src.api  = s.value("api", "");
-            if (!src.key.empty() && !src.api.empty()) result.push_back(std::move(src));
-        }
-    } catch (...) {
-        return result;
-    }
-    return result;
-}
-
-std::vector<TvboxHit> searchTvboxSource(const TvboxSource& src, const std::string& keyword,
-                                        HttpResponse* out) {
+// ---- 标准 tvbox 搜索：GET {api}?wd=关键词&ac=detail ----
+std::vector<TvboxHit> searchSite(const TvboxSite& src, const std::string& keyword,
+                                 HttpResponse* out) {
     std::vector<TvboxHit> result;
-    // TVBox 协议：GET {api}?wd=关键词&ac=detail（ac=detail 才返回 vod_play_url）
     std::string url = src.api;
     url += (url.find('?') == std::string::npos ? "?" : "&");
     url += "wd=" + urlEncode(keyword) + "&ac=detail";
 
     HttpResponse resp;
-    httpGet(url, false, &resp);  // 源 API 直连，无需 DecoTV cookie
+    httpGet(url, false, &resp);
     if (out) *out = resp;
     if (resp.body.empty()) return result;
 
@@ -390,24 +295,24 @@ std::vector<TvboxHit> searchTvboxSource(const TvboxSource& src, const std::strin
             hit.sourceName = src.name;
             hit.vodId      = std::to_string(it.value("vod_id", 0));
             hit.vodName    = it.value("vod_name", "");
-            // vod_play_url 形如 "正片$https://...m3u8#第2集$..."，或含 $$$ 多清晰度/直链与分享页变体。
-            // 用 parsePlayUrl 正确处理（v1.27）：优先第一个真实媒体直链，避开 /share/、/play/ 页面地址。
             std::string pu = it.value("vod_play_url", "");
             hit.playUrl = parsePlayUrl(pu);
-            if (!hit.vodName.empty() && !hit.playUrl.empty()) {
-                // v1.26：落盘诊断——记录原始 vod_play_url 与提取出的 playUrl，
-                // 用于定位 -13/-17（尤其 -17 多为 URL 不可直接播放，需解析/换头/解码）
-                std::string raw = pu;
-                if (raw.size() > 600) raw = raw.substr(0, 600) + "...";
-                decotvLog("SRC=" + src.name + " KEY=" + src.key + " vod=" + hit.vodName +
-                          " id=" + hit.vodId);
-                decotvLog("  vod_play_url(raw)=" + raw);
-                decotvLog("  -> playUrl=" + hit.playUrl);
+            if (!hit.vodName.empty() && !hit.playUrl.empty())
                 result.push_back(std::move(hit));
-            }
         }
-    } catch (...) {
-        return result;
+    } catch (...) {}
+    return result;
+}
+
+// ---- 跨所有源搜索 ----
+std::vector<TvboxHit> searchAllSources(const std::vector<TvboxSite>& sites,
+                                       const std::string& keyword) {
+    std::vector<TvboxHit> result;
+    int limit = (int)sites.size() < 8 ? (int)sites.size() : 8;
+    for (int i = 0; i < limit; ++i) {
+        if (!sites[i].searchable) continue;
+        auto hits = searchSite(sites[i], keyword);
+        for (auto& h : hits) result.push_back(std::move(h));
     }
     return result;
 }
