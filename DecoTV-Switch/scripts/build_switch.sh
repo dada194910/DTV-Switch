@@ -4,6 +4,10 @@
 set -e
 
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
+# devkitA64 容器固定路径；显式导出（容器环境变量未设置，make 的 $(shell) 子进程
+# 不继承 switch_rules 内的定义，导致 pkg-config 找不到 mpv.pc）
+export PORTLIBS="/opt/devkitpro/portlibs/switch"
+export PORTLIBS_PREFIX="$PORTLIBS"
 
 echo "==> Ensuring devkitA64 toolchain + deko3d + glm + curl + dav1d ..."
 # --needed：已安装的包直接跳过，避免每次构建重复下载（也规避 devkitPro CDN 偶发 403）
