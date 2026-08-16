@@ -5,13 +5,20 @@
 #include <borealis/core/logger.hpp>
 #include <borealis/core/thread.hpp>  // brls::sync（跨线程投递到 UI 线程）
 
+#include <sys/stat.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 // 把关键 mpv 错误追加写入 sdmc 日志，便于真机排错（v1.22）
+// v1.28：加 256KB 上限，超了就覆盖重来，避免日志无限增长吃满 SD 卡
 static void appendMpvLog(const std::string& line) {
-    FILE* f = fopen("sdmc:/switch/DecoTV/mpv.log", "a");
+    const char* path = "sdmc:/switch/DecoTV/mpv.log";
+    const char* mode = "a";
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > 256 * 1024) mode = "w";
+    FILE* f = fopen(path, mode);
     if (f) {
         fputs(line.c_str(), f);
         fputc('\n', f);
