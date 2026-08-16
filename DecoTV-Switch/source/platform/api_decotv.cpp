@@ -340,21 +340,16 @@ static void doubanHttpGet(const std::string& url, HttpResponse* out) {
     curl_easy_setopt(curl, CURLOPT_USERAGENT,
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);          // 单请求上限 8s，防卡首页
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 6L);          // 首页只给 6s，失败立即转源兜底
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 4L);
     struct curl_slist* hdr = nullptr;
     hdr = curl_slist_append(hdr, "Referer: https://movie.douban.com/");
     hdr = curl_slist_append(hdr, "Accept: application/json, text/plain, */*");
+    hdr = curl_slist_append(hdr, "Cookie: bid=decotv1234");  // 无 cookie 时部分环境会被拦
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");  // 自动 gzip/deflate 解压
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    bool ok = false;
-    for (int a = 0; a < 2; ++a) {
-        body.clear();
-        ok = perform(curl, out);
-        if (ok) break;
-        sleep(1);
-    }
+    perform(curl, out);                 // 首页只试 1 次，失败立即转源兜底（避免卡太久）
     curl_slist_free_all(hdr);
     curl_easy_cleanup(curl);
     if (out) out->body = body;
@@ -389,6 +384,57 @@ std::vector<VodItem> fetchDoubanRecommend() {
         }
     } catch (...) {}
     trailLog("douban: got " + std::to_string(out.size()) + " items");
+    return out;
+}
+
+// 兜底：豆瓣不可达时，从用户已配置源拉 ac=list 热门列表当首页海报墙
+// （tvbox 首页本质是源自身内容，比依赖豆瓣更稳、也更贴合 TVBox 习惯）
+std::vector<VodItem> fetchSourceRecommend(const std::vector<TvboxSite>& sites) {
+    std::vector<VodItem> out;
+    int n = std::min((int)sites.size(), 2);   // 最多取 2 个源凑满一屏，控制首页加载耗时
+    for (int i = 0; i < n && (int)out.size() < 30; ++i) {
+        auto& s = sites[i];
+        std::string url = s.api;
+        url += (url.find('?') == std::string::npos ? "?" : "&");
+        url += "ac=videolist&pg=1";   // videolist 才带 vod_pic 海报；ac=list 不带
+        std::string body;
+        CURL* c = makeHandle(&body);
+        if (!c) continue;
+        curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(c, CURLOPT_TIMEOUT, 6L);   // 首页每源最多 6s
+        HttpResponse resp;
+        perform(c, &resp);
+        curl_easy_cleanup(c);
+        resp.body = body;
+        if (resp.body.empty()) {
+            trailLog("srcRec: " + s.key + " empty (http=" + std::to_string(resp.status) + ")");
+            continue;
+        }
+        try {
+            json j = json::parse(resp.body);
+            if (!j.contains("list") || !j["list"].is_array()) {
+                trailLog("srcRec: " + s.key + " no list field");
+                continue;
+            }
+            for (auto& it : j["list"]) {
+                VodItem item;
+                item.sourceKey = s.key;
+                item.sourceName = s.name;
+                item.vodId = std::to_string(it.value("vod_id", 0));
+                item.vodName = it.value("vod_name", "");
+                item.pic = it.value("vod_pic", "");
+                if (item.vodName.empty() || item.pic.empty()) continue;
+                std::string pu = it.value("vod_play_url", "");
+                item.playUrl = parsePlayUrl(pu);
+                out.push_back(std::move(item));
+                if ((int)out.size() >= 30) break;
+            }
+        } catch (...) {
+            trailLog("srcRec: " + s.key + " parse err");
+        }
+        if ((int)out.size() >= 12) break;   // 已够一屏，少等后续源
+    }
+    trailLog("srcRec: got " + std::to_string(out.size()) + " items");
     return out;
 }
 
