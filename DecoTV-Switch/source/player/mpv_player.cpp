@@ -60,7 +60,7 @@ bool Player::init() {
     mpv_set_option_string(m_mpv, "demuxer-max-bytes", "64MiB");
     mpv_set_option_string(m_mpv, "demuxer-max-back-bytes", "32MiB");
     // 视频缓存写到受控目录 cache/mpv（Switch 无系统临时盘），不再落系统目录；
-    // 退出时由 exitNetwork() 清掉，避免 SD 卡被缓存占满（v2.01）。
+    // 退出时由 exitNetwork() 清掉，避免 SD 卡被缓存占满（v2.00）。
     mpv_set_option_string(m_mpv, "cache-dir",
                           "sdmc:/switch/DecoTV/cache/mpv");
     mpv_set_option_string(m_mpv, "cache-on-disk", "yes");
