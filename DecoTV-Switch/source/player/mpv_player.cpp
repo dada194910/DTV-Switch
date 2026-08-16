@@ -3,6 +3,7 @@
 #include "mpv_player.hpp"
 
 #include <borealis/core/logger.hpp>
+#include <borealis/core/thread.hpp>  // brls::sync（跨线程投递到 UI 线程）
 
 #include <cstdlib>
 #include <cstring>
@@ -133,14 +134,12 @@ void Player::processEvents() {
 
         switch (ev->event_id) {
             case MPV_EVENT_LOG_MESSAGE: {
+                // libmpv 的 MPV_LOG_LEVEL_* 是字符串宏（"error"/"fatal"...），用 strcmp 判断
                 auto* log = static_cast<mpv_event_log_message*>(ev->data);
-                if (log->level <= MPV_LOG_LEVEL_ERROR) {
+                if (strcmp(log->level, "error") == 0 || strcmp(log->level, "fatal") == 0) {
                     if (m_cb) m_cb(Event::ERROR, 0, std::string(log->prefix) + ": " + log->text);
-                    else brls::Logger::error("mpv {}: {}", log->prefix, log->text);
-                } else if (log->level <= MPV_LOG_LEVEL_WARN) {
-                    brls::Logger::warning("mpv {}: {}", log->prefix, log->text);
-                } else if (log->level <= MPV_LOG_LEVEL_INFO) {
-                    brls::Logger::info("mpv {}: {}", log->prefix, log->text);
+                } else {
+                    brls::Logger::debug("mpv {}: {}", log->prefix, log->text);
                 }
                 break;
             }
