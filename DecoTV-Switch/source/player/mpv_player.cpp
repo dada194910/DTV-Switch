@@ -105,6 +105,7 @@ void Player::open(const std::string& url) {
         brls::Logger::info("mpv: referer set -> {}", ref);
     }
     brls::Logger::info("mpv: loading {}", url);
+    appendMpvLog("OPEN url=" + url);   // v1.26：落盘实际喂给 mpv 的地址，定位 -17（格式不可识别）
     const char* cmd[] = {"loadfile", url.c_str(), nullptr};
     mpv_command_async(m_mpv, 0, cmd);
 }
@@ -195,6 +196,7 @@ void Player::processEvents() {
                 } else if (lvl == "error" || lvl == "fatal") {
                     // error 级（含音频降级）仅记录，不弹窗；真正的致命加载失败由 END_FILE 上报
                     brls::Logger::error("mpv {}: {}", log->prefix, log->text);
+                    appendMpvLog("MPVLOG " + std::string(log->prefix) + ": " + log->text);  // v1.26
                 } else {
                     brls::Logger::debug("mpv {}: {}", log->prefix, log->text);
                 }
