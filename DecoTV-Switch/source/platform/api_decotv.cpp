@@ -25,6 +25,14 @@ using json = nlohmann::json;
 
 unsigned int g_netInitResult = 0;
 
+// 缓存目录（MPV_DIR 在 exitNetwork 中用到，故前置声明/定义于此）
+static const char* CACHE_DIR = "sdmc:/switch/DecoTV/cache";
+static const char* IMG_DIR   = "sdmc:/switch/DecoTV/cache/img";
+static const char* MPV_DIR   = "sdmc:/switch/DecoTV/cache/mpv";
+
+// 前向声明：下面 exitNetwork 用到，定义在文件末尾缓存段
+static void removeDirFiles(const char* dir);
+
 // ---- URL 编码（中文参数如片名需要）----
 static std::string urlEncode(const std::string& s) {
     std::string out;
@@ -391,9 +399,7 @@ void parseEpisodes(const std::string& raw, std::vector<std::string>& names,
 }
 
 // ---- 缓存管理 ----
-static const char* CACHE_DIR = "sdmc:/switch/DecoTV/cache";
-static const char* IMG_DIR   = "sdmc:/switch/DecoTV/cache/img";
-static const char* MPV_DIR   = "sdmc:/switch/DecoTV/cache/mpv";
+// CACHE_DIR / IMG_DIR / MPV_DIR 已在文件顶部定义（供 exitNetwork 使用）
 
 // djb2 哈希 -> 16 进制串，用作缓存文件名
 static std::string hashHex(const std::string& s) {
