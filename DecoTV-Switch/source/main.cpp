@@ -353,8 +353,15 @@ class ResultsActivity : public brls::Activity {
     std::vector<decotv::VodItem> m_items;
 };
 
-// 点豆瓣推荐：用片名去用户已配置的各源搜索，搜到进结果页，否则提示
+// 点推荐条目：源兜底条目自带源+直链，直接进详情/选集；豆瓣条目用片名去各源搜
 static void onDoubanSelect(const decotv::VodItem& item) {
+    if (item.sourceKey != "douban" && !item.playUrl.empty()) {
+        const decotv::TvboxSite* s = findSite(item.sourceKey);
+        if (s) {
+            brls::Application::pushActivity(new DetailActivity(item, *s));
+            return;
+        }
+    }
     auto hits = decotv::searchAllSources(g_sites, item.vodName);
     if (hits.empty()) {
         auto* dlg = new brls::Dialog("未找到《" + item.vodName + "》\n（已配置源里搜不到该片）");
@@ -365,34 +372,45 @@ static void onDoubanSelect(const decotv::VodItem& item) {
     brls::Application::pushActivity(new ResultsActivity(item.vodName, hits));
 }
 
-// ---- 首页推荐 tab（仿 TVBox：豆瓣热门海报墙）----
-// 同步拉取（borealis fork 规定：数据加载用同步，勿用线程+sync 改视图树）
+// ---- 首页推荐 tab（仿 TVBox：源热门海报墙，开箱即用）----
+// 同步拉取（borealis fork 规定：数据加载用同步，勿用线程+sync 改视图树）。
+// 顺序：播放源优先（未配置源时自动用内置公共源兜底），豆瓣其次作增强。
 static brls::View* buildRecommendTab() {
     auto* root = new brls::Box(brls::Axis::COLUMN);
     auto* header = new brls::Header();
-    header->setTitle("豆瓣推荐");
+    header->setTitle("推荐");
     root->addView(header);
 
     auto* scroll = new brls::ScrollingFrame();
-    auto* box = new brls::Box(brls::Axis::COLUMN);
-    auto* tip = new brls::Label();
-    tip->setText("正在加载豆瓣推荐…");
-    tip->setFontSize(22);
-    box->addView(tip);
-    scroll->setContentView(box);
-    root->addView(scroll);
+    auto* wrap = new brls::Box(brls::Axis::COLUMN);
+    wrap->setPadding(20, 20, 20, 20);
 
-    auto items = decotv::fetchDoubanRecommend();
-    if (items.empty()) {
-        auto* err = new brls::Box(brls::Axis::COLUMN);
-        auto* lbl = new brls::Label();
-        lbl->setText("豆瓣推荐加载失败（网络异常 / 豆瓣拦截）\n可在「🔍 搜索」手动搜片名");
-        lbl->setFontSize(22);
-        err->addView(lbl);
-        scroll->setContentView(err);
+    auto* diag = new brls::Label();
+    diag->setFontSize(18);
+    wrap->addView(diag);
+
+    std::vector<decotv::VodItem> items;
+    std::string diagTxt;
+    auto fromSrc = decotv::fetchSourceRecommend(g_sites);  // 含内置公共源兜底
+    if (!fromSrc.empty()) {
+        items = std::move(fromSrc);
+        diagTxt = "数据来源：播放源热门（" + std::to_string(items.size()) + " 部）";
     } else {
-        scroll->setContentView(buildPosterGrid(items, onDoubanSelect));
+        auto douban = decotv::fetchDoubanRecommend();
+        if (!douban.empty()) {
+            items = std::move(douban);
+            diagTxt = "数据来源：豆瓣·热门";
+        } else {
+            diagTxt = "推荐加载失败：\n· 播放源与豆瓣均未连通\n请检查 Switch 联网，或到「⚙ 设置」添加源";
+        }
     }
+    diag->setText(diagTxt);
+
+    if (!items.empty())
+        wrap->addView(buildPosterGrid(items, onDoubanSelect));
+
+    scroll->setContentView(wrap);
+    root->addView(scroll);
     return root;
 }
 
@@ -522,7 +540,7 @@ static brls::View* buildSettingsTab() {
     }));
 
     // 关于
-    root->addView(makeRow("关于", "DecoTV v2.03 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
+    root->addView(makeRow("关于", "DecoTV v2.06 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
         return true;
     }));
 
