@@ -41,19 +41,29 @@ echo "==> borealis 就绪检查:"
 ls library/borealis/library/lib/extern/switch-libpulsar/deps.mk && echo "  deps.mk OK"
 ls library/borealis/resources/font/ >/dev/null && echo "  resources OK"
 
-echo "==> Installing ffmpeg + libmpv (devkitPro official pkgs) ..."
-# P4b 播放依赖：devkitPro 仓库自带 switch-ffmpeg(7.1-5) + switch-libmpv(0.39.0-2)，
-# 依赖（dav1d/placebo/libarchive 等）由 pacman 自动解析，无需 wiliwili 预编译包
-dkp-pacman -S --noconfirm --needed switch-ffmpeg switch-libmpv
-# 确认 mpv 头文件可用（诊断路径）
-echo "  PORTLIBS_PREFIX=$PORTLIBS_PREFIX"
-if [ -f "$PORTLIBS_PREFIX/include/mpv/client.h" ]; then
+echo "==> Installing ffmpeg + libmpv (wiliwili deko3d pkgs; devkitPro libmpv is SDL-only, no render API) ..."
+# P4b 播放依赖：wiliwili 的 libmpv_deko3d（软渲染 render API 支持）+ libuam + ffmpeg
+# 注意：devkitPro 官方 switch-libmpv 是 SDL 后端（无 mpv_render_context），不能用；
+# 装 wiliwili 包会"降级"覆盖，可接受（本项目专用环境）
+MPV_BASE="https://github.com/xfangfang/wiliwili/releases/download/v0.1.0"
+for pkg in "libuam-f8c9eef01ffe06334d530393d636d69e2b52744b-1-any.pkg.tar.zst" \
+           "switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
+           "switch-libmpv_deko3d-0.36.0-2-any.pkg.tar.zst"; do
+    if [ ! -f "/tmp/$pkg" ]; then
+        curl -sL -m 180 -o "/tmp/$pkg" "$MPV_BASE/$pkg" || echo "  !! download $pkg failed"
+    fi
+    echo "  installing $pkg ..."
+    dkp-pacman -U --noconfirm "/tmp/$pkg" || echo "  !! install $pkg failed (see error above)"
+done
+# 确认 mpv 头文件（注意用 $PORTLIBS，PORTLIBS_PREFIX 在容器里是空的）
+echo "  PORTLIBS=$PORTLIBS"
+if [ -f "$PORTLIBS/include/mpv/client.h" ]; then
     echo "  mpv headers OK"
 else
-    echo "  !! mpv headers MISSING (checked $PORTLIBS_PREFIX/include/mpv/client.h)"
-    ls "$PORTLIBS_PREFIX/include/" 2>/dev/null | head -10
+    echo "  !! mpv headers MISSING (checked $PORTLIBS/include/mpv/client.h)"
 fi
-echo "  mpv libs: $(pkg-config --static --libs mpv 2>/dev/null || echo 'pkg-config FAILED')"
+echo "  mpv.pc: $(ls "$PORTLIBS/lib/pkgconfig/" 2>/dev/null | grep -i mpv || echo 'no mpv.pc')"
+echo "  mpv libs(dkp-pkg-config): $(dkp-pkg-config --static --libs mpv 2>/dev/null || echo 'FAILED')"
 
 echo "==> Building (classic devkitPro Makefile + borealis) ..."
 cd /data/DecoTV-Switch
