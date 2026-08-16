@@ -107,15 +107,17 @@ static brls::Box* buildPosterGrid(const std::vector<decotv::VodItem>& items,
                                   std::function<void(const decotv::VodItem&)> onSelect) {
     auto* grid = new brls::Box(brls::Axis::COLUMN);
     grid->setPadding(20, 20, 20, 20);
-    grid->setSpacing(20);
     const int COLS = 5;
     size_t n = std::min(items.size(), (size_t)30);  // 限制数量，避免卡顿
     for (size_t i = 0; i < n; i += COLS) {
         auto* row = new brls::Box(brls::Axis::ROW);
-        row->setSpacing(20);
         row->setJustifyContent(brls::JustifyContent::FLEX_START);
-        for (int c = 0; c < COLS && i + c < n; ++c)
-            row->addView(makePosterCard(items[i + c], onSelect));
+        row->setMarginBottom(20);  // 行间距（替代 setSpacing）
+        for (int c = 0; c < COLS && i + c < n; ++c) {
+            auto* card = makePosterCard(items[i + c], onSelect);
+            card->setMarginRight(20);  // 卡片间距（替代 setSpacing）
+            row->addView(card);
+        }
         grid->addView(row);
     }
     return grid;
@@ -267,7 +269,6 @@ class DetailActivity : public brls::Activity {
         // 选集网格
         auto* scroll = new brls::ScrollingFrame();
         auto* grid = new brls::Box(brls::Axis::COLUMN);
-        grid->setSpacing(12);
         const int COLS = 6;
         if (m_item.episodeNames.empty()) {
             auto* none = new brls::Label();
@@ -277,14 +278,15 @@ class DetailActivity : public brls::Activity {
         } else {
             for (size_t i = 0; i < m_item.episodeNames.size(); i += COLS) {
                 auto* row = new brls::Box(brls::Axis::ROW);
-                row->setSpacing(12);
                 row->setJustifyContent(brls::JustifyContent::FLEX_START);
+                row->setMarginBottom(12);  // 行间距（替代 setSpacing）
                 for (int c = 0; c < COLS && i + c < (int)m_item.episodeNames.size(); ++c) {
                     int idx = (int)(i + c);
                     auto* ep = new brls::Box(brls::Axis::COLUMN);
                     ep->setFocusable(true);
                     ep->setWidth(150);
                     ep->setHeight(60);
+                    ep->setMarginRight(12);  // 选集间距（替代 setSpacing）
                     auto* lbl = new brls::Label();
                     lbl->setText(m_item.episodeNames[idx]);
                     lbl->setFontSize(18);
