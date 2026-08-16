@@ -59,6 +59,12 @@ bool Player::init() {
     mpv_set_option_string(m_mpv, "keep-open", "yes");
     mpv_set_option_string(m_mpv, "demuxer-max-bytes", "64MiB");
     mpv_set_option_string(m_mpv, "demuxer-max-back-bytes", "32MiB");
+    // 视频缓存写到受控目录 cache/mpv（Switch 无系统临时盘），不再落系统目录；
+    // 退出时由 exitNetwork() 清掉，避免 SD 卡被缓存占满（v2.01）。
+    mpv_set_option_string(m_mpv, "cache-dir",
+                          "sdmc:/switch/DecoTV/cache/mpv");
+    mpv_set_option_string(m_mpv, "cache-on-disk", "yes");
+    mpv_set_option_string(m_mpv, "cache-secs", "120");  // 仅缓存近期片段，控制体积
     // 防盗链：很多源站按 UA 白名单校验，用浏览器 UA（v1.18）
     mpv_set_option_string(m_mpv, "user-agent",
                           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
