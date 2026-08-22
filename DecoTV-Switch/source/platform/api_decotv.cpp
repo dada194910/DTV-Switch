@@ -465,12 +465,12 @@ std::vector<VodItem> fetchDoubanRecommend() {
 // 兜底：豆瓣不可达时，从用户已配置源拉 ac=list 热门列表当首页海报墙
 // （tvbox 首页本质是源自身内容，比依赖豆瓣更稳、也更贴合 TVBox 习惯）
 std::vector<VodItem> fetchSourceRecommend(const std::vector<TvboxSite>& sites) {
-    std::vector<TvboxSite> use = sites;
-    if (use.empty()) {
-        // 用户未配置源时，用内置公共源兜底，保证首页开箱即有内容（用户可在设置里覆盖）
-        TvboxSite a; a.key="360zy"; a.name="360zy"; a.api="https://360zy.com/api.php/provide/vod"; a.searchable=true; use.push_back(a);
-        TvboxSite b; b.key="lelve"; b.name="乐视"; b.api="https://api.lelve.cn/api.php/provide/vod"; b.searchable=true; use.push_back(b);
-    }
+    // 首页推荐固定用内置公共源（360zy/lelve），不取用户 config 前两个源。
+    // 原因：用户源顺序不稳定、接口各异，取前两个容易空白/卡首页。内置源稳定支持 ac=videolist。
+    (void)sites;
+    std::vector<TvboxSite> use;
+    TvboxSite a; a.key="360zy"; a.name="360zy"; a.api="https://360zy.com/api.php/provide/vod"; a.searchable=true; use.push_back(a);
+    TvboxSite b; b.key="lelve"; b.name="乐视"; b.api="https://api.lelve.cn/api.php/provide/vod"; b.searchable=true; use.push_back(b);
     std::vector<VodItem> out;
     int n = std::min((int)use.size(), 2);   // 最多取 2 个源凑满一屏，控制首页加载耗时
     for (int i = 0; i < n && (int)out.size() < 30; ++i) {
