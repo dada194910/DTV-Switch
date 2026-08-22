@@ -391,8 +391,9 @@ void probeSites(std::vector<TvboxSite>& sites) {
 // ---- 跨所有源搜索 ----
 std::vector<VodItem> searchAllSources(std::vector<TvboxSite>& sites,
                                       const std::string& keyword) {
-    // 每次搜索前先探测所有源存活+延时，并把延时标到 name（侧栏/结果随之显示）
-    probeSites(sites);
+    // [v2.08 止血] 临时移除 probeSites 并发探测：v2.07 一搜索即起 18 个 curl 线程并在主线程 join，
+    // 在 Switch 上导致冻屏/死机。待确认元凶后改为异步不阻塞 UI 的版本再加回。
+    // probeSites(sites);
 
     std::vector<VodItem> result;
     int limit = (int)sites.size() < 8 ? (int)sites.size() : 8;
