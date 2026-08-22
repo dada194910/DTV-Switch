@@ -16,6 +16,9 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <thread>
+#include <algorithm>
+#include <mutex>
 
 #include "api_decotv.h"
 
@@ -145,7 +148,8 @@ std::string parsePlayUrl(const std::string& raw) {
 
 // ---- 创建 curl easy handle ----
 // 某些 tvbox 源有防盗链 cookie，沿用 COOKIEFILE+COOKIEJAR 同一文件读写（无害）。
-static CURL* makeHandle(std::string* outBody) {
+// withCookies=false 时跳过 cookie 文件（用于并行探测，避免多线程竞争同一 cookie 文件）。
+static CURL* makeHandle(std::string* outBody, bool withCookies = true) {
     CURL* curl = curl_easy_init();
     if (!curl) return nullptr;
 
@@ -160,9 +164,11 @@ static CURL* makeHandle(std::string* outBody) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-    mkdir("sdmc:/switch/DecoTV", 0777);
-    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "sdmc:/switch/DecoTV/cookies.txt");
-    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, "sdmc:/switch/DecoTV/cookies.txt");
+    if (withCookies) {
+        mkdir("sdmc:/switch/DecoTV", 0777);
+        curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "sdmc:/switch/DecoTV/cookies.txt");
+        curl_easy_setopt(curl, CURLOPT_COOKIEJAR, "sdmc:/switch/DecoTV/cookies.txt");
+    }
 
     return curl;
 }
@@ -318,13 +324,81 @@ std::vector<VodItem> searchSite(const TvboxSite& src, const std::string& keyword
     return result;
 }
 
+// ---- 对所有源做存活+延时探测，并把延时标在 name 后面 ----
+// 探测请求：GET {api}?ac=detail（轻量接口请求，能区分「服务器通但接口坏」）。
+// 并行：每个源一个 std::thread，探测期间不阻塞 UI 太久（耗时≈最慢单源）。
+// 探测结果写回 site.alive / site.latencyMs，并改写 site.name 为带延时/状态标注。
+void probeSites(std::vector<TvboxSite>& sites) {
+    if (sites.empty()) return;
+
+    // 探测单源：返回 (alive, latencyMs)
+    auto probeOne = [](TvboxSite& s) {
+        std::string url = s.api;
+        url += (url.find('?') == std::string::npos ? "?" : "&");
+        url += "ac=detail";   // 轻量：只取接口是否可用，不传 wd
+
+        std::string body;
+        CURL* curl = makeHandle(&body, false);  // 探测不写 cookie，避免多线程竞争
+        if (!curl) {
+            s.alive = false;
+            s.latencyMs = -1;
+            return;
+        }
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 4L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+
+        double total = 0;
+        CURLcode res = curl_easy_perform(curl);
+        long status = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &total);
+        curl_easy_cleanup(curl);
+
+        bool ok = (res == CURLE_OK) && (status == 200) && !body.empty();
+        s.alive = ok;
+        s.latencyMs = ok ? (int)(total * 1000.0 + 0.5) : -1;
+    };
+
+    // 并行探测
+    std::vector<std::thread> ths;
+    ths.reserve(sites.size());
+    for (auto& s : sites)
+        ths.emplace_back(probeOne, std::ref(s));
+    for (auto& t : ths) t.join();
+
+    // 改写 name：原名后加 (延时) / (超时) / (失败)。仅当原名不含 '(' 才改，避免重复累加。
+    for (auto& s : sites) {
+        std::string tag;
+        if (!s.alive) {
+            // 区分超时与失败：CURLE_OK 但非 200 -> 失败；否则视为超时/不可达
+            tag = (s.latencyMs == -1) ? "(超时)" : "(失败)";
+        } else {
+            tag = "(" + std::to_string(s.latencyMs) + "ms)";
+        }
+        size_t lp = s.name.find('(');
+        if (lp == std::string::npos) {
+            s.name = s.name + " " + tag;
+        } else {
+            // 已带标注：替换旧括号段
+            s.name = s.name.substr(0, lp) + tag;
+        }
+        decotvLog("probe: " + s.key + " alive=" + std::to_string(s.alive) +
+                  " " + tag);
+    }
+}
+
 // ---- 跨所有源搜索 ----
-std::vector<VodItem> searchAllSources(const std::vector<TvboxSite>& sites,
+std::vector<VodItem> searchAllSources(std::vector<TvboxSite>& sites,
                                       const std::string& keyword) {
+    // 每次搜索前先探测所有源存活+延时，并把延时标到 name（侧栏/结果随之显示）
+    probeSites(sites);
+
     std::vector<VodItem> result;
     int limit = (int)sites.size() < 8 ? (int)sites.size() : 8;
     for (int i = 0; i < limit; ++i) {
         if (!sites[i].searchable) continue;
+        if (!sites[i].alive) continue;   // 跳过已确认不可达的源，避免卡死
         auto hits = searchSite(sites[i], keyword);
         for (auto& h : hits) result.push_back(std::move(h));
     }
