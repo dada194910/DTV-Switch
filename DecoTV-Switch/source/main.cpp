@@ -28,18 +28,17 @@ static void setupChineseFont() {
     nvgAddFallbackFontId(brls::Application::getNVGContext(), regular, cjk);
 }
 
-// ---- tvbox 软键盘输入（libnx Swkbd，启用中文拼音 + 英文）----
+// ---- tvbox 软键盘输入（libnx Swkbd）----
+// 注意：当前 CI 工具链（devkitPro devkita64:20251117 的 libnx）尚未暴露
+// SwkbdLanguageType_ChineseSimplified / swkbdConfigSetLanguage 等中文拼音 API，
+// 直接调用会编译失败。故此处仅用跨版本稳定的基础接口；中文拼音输入将在
+// 升级 libnx 后的下一版本（v2.11）单独启用。
 static std::string showKeyboard(const std::string& hint) {
     SwkbdConfig kbd;
     swkbdCreate(&kbd, 0);
     swkbdConfigMakePresetDefault(&kbd);
-    // 启用中文（简体）输入：开启拼音键盘，并允许中英文混合
-    swkbdConfigSetLanguage(&kbd, SwkbdLanguageType_ChineseSimplified);
-    swkbdConfigSetKeyboardMode(&kbd, SwkbdKeyboardMode_Language);
     swkbdConfigSetHeaderText(&kbd, hint.c_str());
     swkbdConfigSetOkButtonText(&kbd, "搜索");
-    swkbdConfigSetHintText(&kbd, "可输入中文 / 英文");
-    // 允许长按切换中英文（Swkbd 自带）
     swkbdConfigSetStringLenMax(&kbd, 64);
     char buf[256] = {0};
     Result rc = swkbdShow(&kbd, buf, sizeof(buf));
