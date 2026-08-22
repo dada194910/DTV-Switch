@@ -28,13 +28,19 @@ static void setupChineseFont() {
     nvgAddFallbackFontId(brls::Application::getNVGContext(), regular, cjk);
 }
 
-// ---- tvbox 软键盘输入（libnx Swkbd）----
+// ---- tvbox 软键盘输入（libnx Swkbd，启用中文拼音 + 英文）----
 static std::string showKeyboard(const std::string& hint) {
     SwkbdConfig kbd;
     swkbdCreate(&kbd, 0);
     swkbdConfigMakePresetDefault(&kbd);
+    // 启用中文（简体）输入：开启拼音键盘，并允许中英文混合
+    swkbdConfigSetLanguage(&kbd, SwkbdLanguageType_ChineseSimplified);
+    swkbdConfigSetKeyboardMode(&kbd, SwkbdKeyboardMode_Language);
     swkbdConfigSetHeaderText(&kbd, hint.c_str());
     swkbdConfigSetOkButtonText(&kbd, "搜索");
+    swkbdConfigSetHintText(&kbd, "可输入中文 / 英文");
+    // 允许长按切换中英文（Swkbd 自带）
+    swkbdConfigSetStringLenMax(&kbd, 64);
     char buf[256] = {0};
     Result rc = swkbdShow(&kbd, buf, sizeof(buf));
     swkbdClose(&kbd);
@@ -372,49 +378,74 @@ static void onDoubanSelect(const decotv::VodItem& item) {
     brls::Application::pushActivity(new ResultsActivity(item.vodName, hits));
 }
 
-// ---- 首页推荐 tab（仿 TVBox：源热门海报墙，开箱即用）----
-// 同步拉取（borealis fork 规定：数据加载用同步，勿用线程+sync 改视图树）。
-// 顺序：播放源优先（未配置源时自动用内置公共源兜底），豆瓣其次作增强。
+// ---- 内置静态分类墙（不联网，开箱即有内容）----
+// 每个分类点击后用分类名当关键词去各源搜索，导向真实结果。
+struct CatItem { std::string name; std::string icon; };
+static const std::vector<CatItem> kCategories = {
+    {"热播剧",   "🔥"}, {"电影",     "🎬"}, {"电视剧",   "📺"},
+    {"动漫",     "🌸"}, {"综艺",     "🎤"}, {"纪录片",   "🌍"},
+    {"少儿",     "🧒"}, {"港剧",     "🀄"}, {"韩剧",     "💝"},
+    {"美剧",     "🍿"}, {"国产剧",   "🇨🇳"}, {"恐怖",     "👻"},
+    {"动作",     "🥋"}, {"喜剧",     "😄"}, {"爱情",     "💕"},
+    {"科幻",     "🚀"}, {"悬疑",     "🕵"}, {"经典",     "🏆"},
+};
+
+static brls::Box* makeCatCard(const CatItem& cat) {
+    auto* card = new brls::Box(brls::Axis::COLUMN);
+    card->setFocusable(true);
+    card->setWidth(200);
+    card->setHeight(110);
+    card->setMarginRight(20);
+    card->setMarginBottom(20);
+    auto* ic = new brls::Label();
+    ic->setText(cat.icon + " " + cat.name);
+    ic->setFontSize(24);
+    ic->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    card->addView(ic);
+    card->registerClickAction([cat](brls::View*) {
+        auto hits = decotv::searchAllSources(g_sites, cat.name);
+        if (hits.empty()) {
+            auto* dlg = new brls::Dialog("「" + cat.name + "」未找到 / 网络失败\n（用上方搜索框可手动输入）");
+            dlg->addButton("确定", [] {});
+            dlg->open();
+        } else {
+            brls::Application::pushActivity(new ResultsActivity(cat.name, hits));
+        }
+        return true;
+    });
+    return card;
+}
+
+// ---- 首页推荐 tab：内置分类墙（不依赖联网，永远有内容）----
 static brls::View* buildRecommendTab() {
     auto* root = new brls::Box(brls::Axis::COLUMN);
     auto* header = new brls::Header();
-    header->setTitle("推荐");
+    header->setTitle("推荐 · 分类直达");
     root->addView(header);
 
     auto* scroll = new brls::ScrollingFrame();
     auto* wrap = new brls::Box(brls::Axis::COLUMN);
     wrap->setPadding(20, 20, 20, 20);
+    auto* tip = new brls::Label();
+    tip->setText("点分类直接搜 · 上方搜索框可输入中/英文片名");
+    tip->setFontSize(18);
+    wrap->addView(tip);
 
-    auto* diag = new brls::Label();
-    diag->setFontSize(18);
-    wrap->addView(diag);
-
-    std::vector<decotv::VodItem> items;
-    std::string diagTxt;
-    auto fromSrc = decotv::fetchSourceRecommend(g_sites);  // 含内置公共源兜底
-    if (!fromSrc.empty()) {
-        items = std::move(fromSrc);
-        diagTxt = "数据来源：播放源热门（" + std::to_string(items.size()) + " 部）";
-    } else {
-        auto douban = decotv::fetchDoubanRecommend();
-        if (!douban.empty()) {
-            items = std::move(douban);
-            diagTxt = "数据来源：豆瓣·热门";
-        } else {
-            diagTxt = "推荐加载失败：\n· 播放源与豆瓣均未连通\n请检查 Switch 联网，或到「⚙ 设置」添加源";
-        }
+    const int COLS = 5;
+    for (size_t i = 0; i < kCategories.size(); i += COLS) {
+        auto* row = new brls::Box(brls::Axis::ROW);
+        row->setJustifyContent(brls::JustifyContent::FLEX_START);
+        for (int c = 0; c < COLS && i + c < kCategories.size(); ++c)
+            row->addView(makeCatCard(kCategories[i + c]));
+        wrap->addView(row);
     }
-    diag->setText(diagTxt);
-
-    if (!items.empty())
-        wrap->addView(buildPosterGrid(items, onDoubanSelect));
 
     scroll->setContentView(wrap);
     root->addView(scroll);
     return root;
 }
 
-// ---- 搜索全部源 标签内容 ----
+// ---- 搜索全部源 标签内容（常驻搜索框 + 中/英文键盘）----
 static brls::View* buildSearchTab() {
     auto* root = new brls::Box(brls::Axis::COLUMN);
 
@@ -422,68 +453,52 @@ static brls::View* buildSearchTab() {
     header->setTitle("搜索全部源");
     root->addView(header);
 
+    // 常驻搜索框（可聚焦，点击弹键盘）
+    auto* box = new brls::Box(brls::Axis::ROW);
+    box->setFocusable(true);
+    box->setHeight(64);
+    box->setMarginBottom(12);
+    box->setBackgroundColor(brls::Application::getTheme().getColor("brls/background"));
+    auto* sIcon = new brls::Label();
+    sIcon->setText("🔍");
+    sIcon->setFontSize(26);
+    sIcon->setMarginRight(12);
+    box->addView(sIcon);
+    auto* sText = new brls::Label();
+    sText->setText("点击此处输入片名（中文 / 英文）…");
+    sText->setFontSize(24);
+    box->addView(sText);
+    root->addView(box);
+
     // 结果容器 + 滚动区
+    auto* scroll = new brls::ScrollingFrame();
     auto* content = new brls::Box(brls::Axis::COLUMN);
     auto* hint = new brls::Label();
-    hint->setText("使用下方「搜索」开始");
+    hint->setText("在上方搜索框输入关键词后回车即可搜索");
     hint->setFontSize(22);
     content->addView(hint);
-    auto* scroll = new brls::ScrollingFrame();
     scroll->setContentView(content);
+    root->addView(scroll);
 
-    // 功能区快捷入口（TVBox 风格）：历史 / 搜索 / 收藏
-    auto* bar = new brls::Box(brls::Axis::ROW);
-    bar->setMarginTop(12);
-    bar->setMarginBottom(12);
-    bar->setJustifyContent(brls::JustifyContent::FLEX_START);
-
-    auto* btnSearch = new brls::Button();
-    btnSearch->setText("🔍 搜索");
-    btnSearch->setFontSize(22);
-    btnSearch->setMarginRight(16);
-    btnSearch->registerClickAction([content, scroll](brls::View*) {
-        std::string kw = showKeyboard("输入片名关键词");
+    // 点击搜索框：弹中文键盘，回车即搜
+    box->registerClickAction([sText, content, scroll](brls::View*) {
+        std::string kw = showKeyboard("输入片名关键词（中文 / 英文）");
         if (kw.empty()) return true;
+        sText->setText("🔍 " + kw);
         auto hits = decotv::searchAllSources(g_sites, kw);
         if (hits.empty()) {
-            auto* box = new brls::Box(brls::Axis::COLUMN);
+            auto* box2 = new brls::Box(brls::Axis::COLUMN);
             auto* lbl = new brls::Label();
             lbl->setText("未找到 / 网络失败");
             lbl->setFontSize(22);
-            box->addView(lbl);
-            scroll->setContentView(box);
+            box2->addView(lbl);
+            scroll->setContentView(box2);
         } else {
             scroll->setContentView(buildPosterGrid(hits, onItemSelect));
         }
         return true;
     });
-    bar->addView(btnSearch);
 
-    auto* btnHistory = new brls::Button();
-    btnHistory->setText("🕘 历史");
-    btnHistory->setFontSize(22);
-    btnHistory->setMarginRight(16);
-    btnHistory->registerClickAction([](brls::View*) {
-        auto* dlg = new brls::Dialog("历史功能开发中（后续版本）");
-        dlg->addButton("确定", [] {});
-        dlg->open();
-        return true;
-    });
-    bar->addView(btnHistory);
-
-    auto* btnFav = new brls::Button();
-    btnFav->setText("⭐ 收藏");
-    btnFav->setFontSize(22);
-    btnFav->registerClickAction([](brls::View*) {
-        auto* dlg = new brls::Dialog("收藏功能开发中（后续版本）");
-        dlg->addButton("确定", [] {});
-        dlg->open();
-        return true;
-    });
-    bar->addView(btnFav);
-
-    root->addView(bar);
-    root->addView(scroll);
     return root;
 }
 
@@ -578,39 +593,53 @@ class HomeActivity : public brls::Activity {
         // 每个源一个标签
         for (auto& s : g_sites) {
             tab->addTab(s.name, [s]() -> brls::View* {
-                // 单源搜索：复用搜索结果页，但只搜这一源
+                // 单源搜索：常驻搜索框，点弹中文键盘
                 auto* root = new brls::Box(brls::Axis::COLUMN);
                 auto* header = new brls::Header();
                 header->setTitle(s.name);
                 root->addView(header);
+
+                auto* box = new brls::Box(brls::Axis::ROW);
+                box->setFocusable(true);
+                box->setHeight(64);
+                box->setMarginBottom(12);
+                auto* sIcon = new brls::Label();
+                sIcon->setText("🔍");
+                sIcon->setFontSize(26);
+                sIcon->setMarginRight(12);
+                box->addView(sIcon);
+                auto* sText = new brls::Label();
+                sText->setText("点击此处输入片名（中文 / 英文）…");
+                sText->setFontSize(24);
+                box->addView(sText);
+                root->addView(box);
+
+                auto* scroll = new brls::ScrollingFrame();
                 auto* content = new brls::Box(brls::Axis::COLUMN);
                 auto* hint = new brls::Label();
-                hint->setText("按下方按钮搜索此源");
+                hint->setText("在上方搜索框输入关键词后回车即可搜索此源");
                 hint->setFontSize(22);
                 content->addView(hint);
-                auto* scroll = new brls::ScrollingFrame();
                 scroll->setContentView(content);
                 root->addView(scroll);
-                auto* btn = new brls::Button();
-                btn->setText("🔍 搜索 " + s.name);
-                btn->setFontSize(24);
-                btn->registerClickAction([s, content, scroll](brls::View*) {
-                    std::string kw = showKeyboard("输入片名关键词");
+
+                box->registerClickAction([s, sText, content, scroll](brls::View*) {
+                    std::string kw = showKeyboard("输入片名关键词（中文 / 英文）");
                     if (kw.empty()) return true;
+                    sText->setText("🔍 " + kw);
                     auto hits = decotv::searchSite(s, kw);
                     if (hits.empty()) {
-                        auto* box = new brls::Box(brls::Axis::COLUMN);
+                        auto* box2 = new brls::Box(brls::Axis::COLUMN);
                         auto* lbl = new brls::Label();
                         lbl->setText("未找到 / 网络失败");
                         lbl->setFontSize(22);
-                        box->addView(lbl);
-                        scroll->setContentView(box);
+                        box2->addView(lbl);
+                        scroll->setContentView(box2);
                     } else {
                         scroll->setContentView(buildPosterGrid(hits, onItemSelect));
                     }
                     return true;
                 });
-                root->addView(btn);
                 return root;
             });
         }
