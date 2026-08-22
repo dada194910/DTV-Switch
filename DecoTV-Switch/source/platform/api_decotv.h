@@ -12,9 +12,11 @@ namespace decotv {
 // 播放源（标准 tvbox 订阅格式子集）
 struct TvboxSite {
     std::string key;     // 源标识，如 "360zy"
-    std::string name;    // 显示名，如 "TV-360资源"
+    std::string name;    // 显示名，如 "TV-360资源"（搜索时会被改写为 "TV-360资源 (123ms)" 带延时）
     std::string api;     // 源接口基地址（标准 tvbox json 接口），如 https://360zy.com/api.php/provide/vod
     bool searchable = true;
+    bool alive = true;       // 最近一次探测是否存活（接口可达且返回有效）
+    int  latencyMs = -1;     // 最近一次探测延时（毫秒）；-1=未测/失败
 };
 
 // 视频条目（搜索/分类返回）。pic=海报，playUrl=直接可播地址（搜索即带），
@@ -52,9 +54,17 @@ std::vector<TvboxSite> loadConfig();
 std::vector<VodItem> searchSite(const TvboxSite& src, const std::string& keyword,
                                 HttpResponse* out = nullptr);
 
-// 跨所有源搜索（合并各源结果，最多取前 8 个源）
-std::vector<VodItem> searchAllSources(const std::vector<TvboxSite>& sites,
+// 跨所有源搜索（合并各源结果，最多取前 8 个源）。
+// 注意：sites 以非 const 引用传入，函数内部会先对所有源做一次存活/延时探测
+// （每次搜索都测，符合「每次搜索测速」需求），并把延时标注写回 site.name。
+std::vector<VodItem> searchAllSources(std::vector<TvboxSite>& sites,
                                       const std::string& keyword);
+
+// 对所有源做轻量存活+延时探测：GET {api}?ac=detail，读 CURLINFO_TOTAL_TIME。
+// 并行探测（每个源一个线程），超时/非 200/解析失败 -> alive=false，latencyMs=-1。
+// 探测后改写 site.name 为「原名 (123ms)」/「原名 (超时)」/「原名 (失败)」，
+// 供侧栏/搜索结果直接显示。原 name 不含括号时才改写（避免重复累加）。
+void probeSites(std::vector<TvboxSite>& sites);
 
 // 豆瓣推荐（仿 TVBox 首页海报墙）：拉热门榜单，返回 VodItem（仅海报+片名，无直链，
 // 点击时由界面拿片名去用户已配置源里搜）。失败返回空（界面显示降级提示）。
