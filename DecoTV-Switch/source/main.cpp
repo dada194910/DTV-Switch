@@ -9,7 +9,7 @@
 #include <algorithm>
 
 #include "platform/api_decotv.h"
-#include "player/mpv_player.hpp"
+#include "player/mpv_core.hpp"
 
 static std::vector<decotv::TvboxSite> g_sites;
 static std::string g_startupError;
@@ -131,72 +131,33 @@ static brls::Box* buildPosterGrid(const std::vector<decotv::VodItem>& items,
 // ---- 视频画面视图（libmpv 软渲染帧 → nanovg 纹理）----
 class PlayerView : public brls::View {
   public:
-    void setPlayer(mpv_player::Player* p) { m_player = p; }
-
     void draw(NVGcontext* vg, float x, float y, float w, float h, brls::Style style,
               brls::FrameContext* ctx) override {
-        if (!m_player) return;
-        int dw = (int)(w * brls::Application::windowScale);
-        int dh = (int)(h * brls::Application::windowScale);
-        m_player->resizeSurface(dw, dh);
-        if (m_player->renderFrame()) {
-            if (m_tex && (m_texW != dw || m_texH != dh)) {
-                nvgDeleteImage(vg, m_tex);
-                m_tex = 0;
-            }
-            if (!m_tex) {
-                m_tex = nvgCreateImageRGBA(vg, dw, dh, 0,
-                                           (const unsigned char*)m_player->frameData());
-                m_texW = dw;
-                m_texH = dh;
-            } else {
-                nvgUpdateImage(vg, m_tex, (const unsigned char*)m_player->frameData());
-            }
-        }
-        if (m_tex) {
-            NVGpaint p = nvgImagePattern(vg, x, y, w, h, 0, m_tex, 1.0f);
-            nvgBeginPath(vg);
-            nvgRect(vg, x, y, w, h);
-            nvgFillPaint(vg, p);
-            nvgFill(vg);
-        }
+        // deko3d 模式下视频由 MPVCore 直接渲染到屏幕帧缓冲（GPU 硬件渲染），
+        // 这里每帧触发一次渲染，文字信息由下方 Label 叠加在上层。
+        MPVCore::instance().draw();
     }
-
-    ~PlayerView() override {
-        if (m_tex) nvgDeleteImage(brls::Application::getNVGContext(), m_tex);
-    }
-
-  private:
-    mpv_player::Player* m_player = nullptr;
-    int m_tex   = 0;
-    int m_texW  = 0;
-    int m_texH  = 0;
 };
 
 // ---- 播放器页 ----
 class PlayerActivity : public brls::Activity {
   public:
     explicit PlayerActivity(std::string url) : m_url(std::move(url)) {}
-    ~PlayerActivity() override { m_player.destroy(); }
+    ~PlayerActivity() override { MPVCore::instance().stop(); }
 
     brls::View* createContentView() override {
-        m_player.setEventCallback([this](mpv_player::Event ev, double, const std::string& msg) {
-            switch (ev) {
-                case mpv_player::Event::LOADED:
-                    if (m_info) m_info->setText("播放中  A 暂停/播放  B 返回");
-                    break;
-                case mpv_player::Event::ENDED:
-                    if (m_info) m_info->setText("播放结束  B 返回");
-                    break;
-                case mpv_player::Event::ERROR:
-                    if (m_info) m_info->setText("错误: " + msg);
-                    break;
-            }
+        auto& player = MPVCore::instance();
+        player.init();
+        player.setEventCallback([this](int ev, const std::string& msg) {
+            if (ev == MPVCore::LOADED)
+                m_info->setText("播放中  A 暂停/播放  B 返回");
+            else if (ev == MPVCore::ENDED)
+                m_info->setText("播放结束  B 返回");
+            else if (ev == MPVCore::ERROR)
+                m_info->setText("错误: " + msg);
         });
 
         m_view = new PlayerView();
-        m_view->setPlayer(&m_player);
-        m_view->setHeightPercentage(78);
 
         m_info = new brls::Label();
         m_info->setFontSize(20);
@@ -210,25 +171,22 @@ class PlayerActivity : public brls::Activity {
         auto* frame = new brls::AppletFrame(layout);
         frame->setTitle("播放");
         frame->registerAction("返回", brls::ControllerButton::BUTTON_B, [this](brls::View*) {
-            m_player.stop();
-            m_player.destroy();
+            MPVCore::instance().stop();
             brls::Application::popActivity();
             return true;
         });
         frame->registerAction("暂停/播放", brls::ControllerButton::BUTTON_A, [this](brls::View*) {
-            m_player.togglePause();
+            MPVCore::instance().togglePause();
             return true;
         });
 
         decotv::trailLog("PLAY open url=" + m_url.substr(0, 80));
-        m_player.init();
-        m_player.open(m_url);
+        player.setUrl(m_url);
         return frame;
     }
 
   private:
     std::string m_url;
-    mpv_player::Player m_player;
     PlayerView* m_view = nullptr;
     brls::Label* m_info = nullptr;
 };
@@ -554,7 +512,7 @@ static brls::View* buildSettingsTab() {
     }));
 
     // 关于
-    root->addView(makeRow("关于", "DecoTV v2.06 · 纯 TVBox 客户端 · 打开即用 · 用户自管源", [](brls::View*) {
+    root->addView(makeRow("关于", "DecoTV v2.11 · 纯 TVBox 客户端 · deko3d 硬件渲染播放", [](brls::View*) {
         return true;
     }));
 
