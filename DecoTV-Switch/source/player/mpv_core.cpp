@@ -7,6 +7,7 @@
 
 #include <borealis/core/thread.hpp>
 #include <borealis/core/application.hpp>
+#include <borealis/platforms/switch/switch_video.hpp>  // brls::SwitchVideoContext (deko3d 设备/帧缓冲)
 
 static inline void check_error(int status) {
     if (status < 0) {
